@@ -1,0 +1,34 @@
+{
+  "jsonapi": {"version": "1.0"},
+  "data": [
+    {
+      "type": "node--section",
+      "id": "section-1",
+      "attributes": {
+        "field_section_number": "001",
+        "field_days": ["Mon", "Wed", "Fri"],
+        "field_notes": null
+      },
+      "relationships": {
+        "field_course": {
+          "data": {
+            "type": "node--course",
+            "id": "course-1",
+            "meta": {"drupal_internal__target_id": 1234}
+          }
+        }
+      }
+    }
+  ],
+  "included": [
+    {
+      "type": "node--course",
+      "id": "course-1",
+      "attributes": {
+        "field_course_code": "COSC_O 111",
+        "title": "Computer Programming I",
+        "body": {"processed": "Example description"}
+      }
+    }
+  ]
+}

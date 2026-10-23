@@ -1,0 +1,18 @@
+{
+  "input": {
+    "raw_directory": "data/raw/course_schedule",
+    "file_pattern": "*.json",
+    "recursive": true
+  },
+  "output": {
+    "directory": "data/processed/course_schedule",
+    "primary_csv": "primary_resources.csv",
+    "included_csv": "included_resources.csv",
+    "lossless_jsonl": "resources.jsonl"
+  },
+  "conversion": {
+    "column_separator": ".",
+    "include_source_file": true,
+    "deduplicate_resources": false
+  }
+}

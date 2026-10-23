@@ -1,0 +1,2 @@
+# The initial converter uses only the Python standard library.
+# Add pinned collection-only dependencies here as collectors are introduced.
