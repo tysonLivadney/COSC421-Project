@@ -128,11 +128,35 @@ def iter_resources(payload: dict[str, Any]) -> Iterable[tuple[str, dict[str, Any
             yield "included", resource
 
 
-def discover_input_files(config: dict[str, Any]) -> list[Path]:
+def discover_input_files(
+    config: dict[str, Any], run_directory: Path | None = None
+) -> list[Path]:
     input_config = config["input"]
-    raw_directory = resolve_project_path(input_config["raw_directory"])
+    raw_directory = (
+        run_directory.resolve()
+        if run_directory is not None
+        else resolve_project_path(input_config["raw_directory"])
+    )
     pattern = input_config.get("file_pattern", "*.json")
     recursive = input_config.get("recursive", True)
+
+    # A direct directory remains useful for fixtures and explicitly selected
+    # runs. Otherwise, use only the newest completed collection so interrupted
+    # runs and duplicate pages are never combined.
+    direct_files = sorted(
+        path for path in raw_directory.glob(pattern) if path.is_file()
+    )
+    is_collection = (raw_directory / "manifest.json").is_file()
+    if run_directory is None and not direct_files and not is_collection:
+        completed_runs = sorted(
+            manifest.parent for manifest in raw_directory.glob("*/manifest.json")
+        )
+        if not completed_runs:
+            raise FileNotFoundError(
+                f"No completed collection found in {raw_directory}"
+            )
+        raw_directory = completed_runs[-1]
+
     iterator = raw_directory.rglob(pattern) if recursive else raw_directory.glob(pattern)
     return sorted(path for path in iterator if path.is_file())
 
@@ -188,7 +212,9 @@ def atomic_write_jsonl(path: Path, resources: list[dict[str, Any]]) -> None:
             temporary_path.unlink()
 
 
-def convert(config: dict[str, Any]) -> dict[str, int]:
+def convert(
+    config: dict[str, Any], run_directory: Path | None = None
+) -> dict[str, int]:
     """Convert every configured raw JSON file and return record counts."""
     conversion_config = config["conversion"]
     separator = conversion_config.get("column_separator", ".")
@@ -199,7 +225,7 @@ def convert(config: dict[str, Any]) -> dict[str, int]:
     included_rows: list[dict[str, Any]] = []
     lossless_resources: list[dict[str, Any]] = []
     seen: set[tuple[str, Any, Any]] = set()
-    input_files = discover_input_files(config)
+    input_files = discover_input_files(config, run_directory)
 
     for input_path in input_files:
         with input_path.open("r", encoding="utf-8") as handle:
@@ -256,12 +282,17 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_CONFIG,
         help=f"Configuration file (default: {DEFAULT_CONFIG})",
     )
+    parser.add_argument(
+        "--run-directory",
+        type=Path,
+        help="Completed collection directory to convert (default: newest completed run)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    counts = convert(load_config(args.config.resolve()))
+    counts = convert(load_config(args.config.resolve()), args.run_directory)
     print(
         "Converted "
         f"{counts['input_files']} file(s): "

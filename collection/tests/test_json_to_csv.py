@@ -7,6 +7,7 @@ from pathlib import Path
 
 from collection.json_to_csv import (
     convert,
+    discover_input_files,
     flatten_resource,
     iter_resources,
     relationship_values,
@@ -51,7 +52,9 @@ class JsonToCsvTests(unittest.TestCase):
         fixture = Path(__file__).parent / "fixtures" / "jsonapi_page.json"
         # Keep the test workspace inside the repository so restricted execution
         # environments can exercise the same file-writing path as the project.
-        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary_directory:
+        with tempfile.TemporaryDirectory(
+            dir=Path(__file__).parent
+        ) as temporary_directory:
             temporary_path = Path(temporary_directory)
             raw_directory = temporary_path / "raw"
             output_directory = temporary_path / "processed"
@@ -98,6 +101,30 @@ class JsonToCsvTests(unittest.TestCase):
                 ).splitlines()),
                 2,
             )
+
+    def test_discover_input_files_uses_newest_completed_run(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as temporary_directory:
+            raw_directory = Path(temporary_directory)
+            incomplete = raw_directory / "2026-01-03T000000Z"
+            older = raw_directory / "2026-01-01T000000Z"
+            newer = raw_directory / "2026-01-02T000000Z"
+            for directory in (incomplete, older, newer):
+                directory.mkdir()
+                (directory / "page_0001.json").write_text("{}", encoding="utf-8")
+            (older / "manifest.json").write_text("{}", encoding="utf-8")
+            (newer / "manifest.json").write_text("{}", encoding="utf-8")
+
+            files = discover_input_files(
+                {
+                    "input": {
+                        "raw_directory": str(raw_directory),
+                        "file_pattern": "page_*.json",
+                        "recursive": True,
+                    }
+                }
+            )
+
+            self.assertEqual(files, [newer / "page_0001.json"])
 
 
 if __name__ == "__main__":
