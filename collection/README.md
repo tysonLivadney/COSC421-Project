@@ -5,6 +5,20 @@ Python tools for collecting and converting project data.
 Course data snapshots are available from [GitHub Releases](https://github.com/tysonLivadney/COSC421-Project/releases/latest).
 Extract the downloaded run folder into `data/raw/course_schedule/`.
 
+## Academic Calendar collector
+
+Download every course-description subject page:
+
+```powershell
+python collection/collect_academic_calendar.py
+```
+
+Download one subject while testing:
+
+```powershell
+python collection/collect_academic_calendar.py --subject COSC_O
+```
+
 ## Course Schedule collector
 
 Download all configured datasets:

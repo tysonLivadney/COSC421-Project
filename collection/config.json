@@ -1,4 +1,15 @@
 {
+  "academic_calendar_collection": {
+    "base_url": "https://okanagan.calendar.ubc.ca",
+    "subject_index_path": "course-descriptions/courses-subject",
+    "raw_directory": "data/raw/academic_calendar/course_descriptions",
+    "timeout_seconds": 30,
+    "retry_attempts": 3,
+    "retry_delay_seconds": 10,
+    "request_delay_seconds": 10,
+    "max_subjects": 200,
+    "user_agent": "COSC421-Project/0.1 (educational research)"
+  },
   "course_schedule_collection": {
     "base_url": "https://courses.students.ubc.ca/jsonapi",
     "raw_directory": "data/raw/course_schedule",
