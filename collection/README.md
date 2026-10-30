@@ -19,6 +19,12 @@ Download one subject while testing:
 python collection/collect_academic_calendar.py --subject COSC_O
 ```
 
+Parse the newest complete Calendar collection:
+
+```powershell
+python collection/parse_academic_calendar.py
+```
+
 ## Course Schedule collector
 
 Download all configured datasets:
