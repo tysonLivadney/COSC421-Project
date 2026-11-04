@@ -45,6 +45,29 @@ Edges point from prerequisite to course, so out-degree is the "gateway" score.
 | `group_id` | Edges with the same `group_id` are alternatives ("one of"); a course needs every one of its groups |
 | `alternatives` | Number of courses in the edge's group; `1` means that exact course is required |
 
+## Figures
+
+```bash
+Rscript analysis/viz.R
+```
+
+writes to `figures/`:
+
+| File | Shows |
+|---|---|
+| `gateways.png` | Top 15 courses by out-degree, weighted by `1 / alternatives` |
+| `bridges.png` | Top 15 courses by betweenness, whole calendar |
+| `degree_distribution.png` | In- and out-degree distributions (log-log) |
+| `cosc_gateways.png` | COSC network (COSC courses plus all their prerequisites), node size = out-degree |
+| `cosc_bridges.png` | Same network, node size = betweenness |
+| `cosc_499_chain.png` | Longest prerequisite chain to the capstone, highlighted |
+
+Dashed edges are "one of several" alternatives; solid edges are required. Subjects
+past the three most common are grey "Other" so the colours stay colour-blind safe.
+
+The functions can be reused on other subjects, e.g. `focus_subgraph(g, c("MATH", "STAT"))`,
+`longest_path(g, "COSC_O 499")`.
+
 ## Known limitations
 
 - Non-course alternatives are dropped. For "COSC 310 or fourth-year standing", COSC 310
