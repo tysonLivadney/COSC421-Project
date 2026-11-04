@@ -1,0 +1,98 @@
+{
+  "academic_calendar_collection": {
+    "base_url": "https://okanagan.calendar.ubc.ca",
+    "subject_index_path": "course-descriptions/courses-subject",
+    "raw_directory": "data/raw/academic_calendar/course_descriptions",
+    "timeout_seconds": 30,
+    "retry_attempts": 3,
+    "retry_delay_seconds": 10,
+    "request_delay_seconds": 10,
+    "max_subjects": 200,
+    "user_agent": "COSC421-Project/0.1 (educational research)"
+  },
+  "academic_calendar_parsing": {
+    "raw_directory": "data/raw/academic_calendar/course_descriptions",
+    "output_directory": "data/processed/academic_calendar/course_descriptions",
+    "courses_csv": "courses.csv",
+    "courses_jsonl": "courses.jsonl"
+  },
+  "course_schedule_collection": {
+    "base_url": "https://courses.students.ubc.ca/jsonapi",
+    "raw_directory": "data/raw/course_schedule",
+    "timeout_seconds": 30,
+    "retry_attempts": 3,
+    "retry_delay_seconds": 2,
+    "max_pages_per_dataset": 500,
+    "user_agent": "COSC421-Project/0.1 (educational research)",
+    "datasets": {
+      "academic_periods": {
+        "path": "taxonomy_term/term",
+        "query": {
+          "page[limit]": "50",
+          "sort": "-weight"
+        }
+      },
+      "ubco_2025_26_winter_term_1_sections": {
+        "path": "node/section",
+        "query": {
+          "filter[field_is_visible]": "1",
+          "filter[field_academic_term.meta.drupal_internal__target_id]": "1457",
+          "include": "field_course,field_delivery_mode,field_instructional_method,field_status",
+          "page[limit]": "50"
+        }
+      },
+      "ubco_2025_26_winter_term_2_sections": {
+        "path": "node/section",
+        "query": {
+          "filter[field_is_visible]": "1",
+          "filter[field_academic_term.meta.drupal_internal__target_id]": "1455",
+          "include": "field_course,field_delivery_mode,field_instructional_method,field_status",
+          "page[limit]": "50"
+        }
+      },
+      "ubco_2026_summer_sections": {
+        "path": "node/section",
+        "query": {
+          "filter[field_is_visible]": "1",
+          "filter[field_academic_term.meta.drupal_internal__target_id]": "1459",
+          "include": "field_course,field_delivery_mode,field_instructional_method,field_status",
+          "page[limit]": "50"
+        }
+      },
+      "ubco_2026_27_winter_term_1_sections": {
+        "path": "node/section",
+        "query": {
+          "filter[field_is_visible]": "1",
+          "filter[field_academic_term.meta.drupal_internal__target_id]": "1460",
+          "include": "field_course,field_delivery_mode,field_instructional_method,field_status",
+          "page[limit]": "50"
+        }
+      },
+      "ubco_2026_27_winter_term_2_sections": {
+        "path": "node/section",
+        "query": {
+          "filter[field_is_visible]": "1",
+          "filter[field_academic_term.meta.drupal_internal__target_id]": "1458",
+          "include": "field_course,field_delivery_mode,field_instructional_method,field_status",
+          "page[limit]": "50"
+        }
+      }
+    }
+  },
+  "input": {
+    "raw_directory": "data/raw/course_schedule",
+    "file_pattern": "page_*.json",
+    "recursive": true
+  },
+  "output": {
+    "directory": "data/processed/course_schedule",
+    "primary_csv": "primary_resources.csv",
+    "included_csv": "included_resources.csv",
+    "lossless_jsonl": "resources.jsonl"
+  },
+  "conversion": {
+    "column_separator": ".",
+    "include_source_file": true,
+    "deduplicate_resources": false
+  }
+}
