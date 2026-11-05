@@ -47,26 +47,48 @@ Edges point from prerequisite to course, so out-degree is the "gateway" score.
 
 ## Figures
 
+Pass one or more subject codes (at least one is required):
+
 ```bash
-Rscript analysis/viz.R
+Rscript analysis/viz.R COSC
+Rscript analysis/viz.R COSC ENGL STAT
 ```
 
-writes to `figures/`:
+Each run writes the calendar-wide figures to `figures/` and one folder per subject
+(e.g. `figures/cosc/`):
 
 | File | Shows |
 |---|---|
 | `gateways.png` | Top 15 courses by out-degree, weighted by `1 / alternatives` |
 | `bridges.png` | Top 15 courses by betweenness, whole calendar |
 | `degree_distribution.png` | In- and out-degree distributions (log-log) |
-| `cosc_gateways.png` | COSC network (COSC courses plus all their prerequisites), node size = out-degree |
-| `cosc_bridges.png` | Same network, node size = betweenness |
-| `cosc_499_chain.png` | Longest prerequisite chain to the capstone, highlighted |
+| `subject_heatmap.png` | Prerequisite links between subjects (prerequisite subject → course subject) |
+| `<subject>/gateways.png` | The subject's courses plus all their prerequisites, node size = out-degree |
+| `<subject>/bridges.png` | Same network, node size = betweenness |
+| `<subject>/chain.png` | Longest prerequisite chain in the subject, highlighted |
+| `<subject>/failure_impact.png` | For each course in the subject: courses downstream vs. courses blocked if you fail it |
 
-Dashed edges are "one of several" alternatives; solid edges are required. Subjects
-past the three most common are grey "Other" so the colours stay colour-blind safe.
+"Blocked" means no alternative is left: a course is blocked when every option in one
+of its "one of" groups is blocked. Courses that can still be reached another way count
+as downstream only.
 
-The functions can be reused on other subjects, e.g. `focus_subgraph(g, c("MATH", "STAT"))`,
-`longest_path(g, "COSC_O 499")`.
+Dashed edges are "one of several" alternatives; solid edges are required. The chosen
+subject is always blue; the next two most common subjects get the other colours and
+the rest are grey "Other", so the colours stay colour-blind safe.
+
+In the network plots, interchangeable courses (same prerequisites, unlock the same
+courses) are drawn as one node, e.g. "ENGL 109 (+8 alt.)". Metrics are computed
+before merging.
+
+From R, pick the chain's end course or plot any subgraph:
+
+```r
+source("analysis/viz.R")
+g <- load_network()
+subject_figures(g, "COSC", target = "COSC_O 499")
+plot_network(focus_subgraph(g, c("MATH", "STAT")), ...)
+longest_path(g, "COSC_O 499")
+```
 
 ## Known limitations
 
