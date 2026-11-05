@@ -81,3 +81,14 @@ Run tests:
 ```powershell
 python -m unittest discover -s collection/tests -t . -v
 ```
+
+## Network builder
+
+Turn the parsed Calendar prerequisite text into `nodes.csv` and `edges.csv` in
+`data/processed/network/`:
+
+```powershell
+python collection/build_network.py
+```
+
+See [analysis/README.md](../analysis/README.md) for the file format.
