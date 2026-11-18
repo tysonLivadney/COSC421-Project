@@ -65,6 +65,7 @@ class AcademicProgramCollectorTests(unittest.TestCase):
                 (run_directory / "manifest.json").read_text(encoding="utf-8")
             )
             self.assertEqual(manifest["discovered_program_count"], 3)
+            self.assertEqual(manifest["eligible_program_count"], 2)
             self.assertEqual(manifest["collected_program_count"], 1)
             self.assertEqual(manifest["programs"][0]["faculty"], "Science")
 

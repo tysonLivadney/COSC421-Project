@@ -190,6 +190,7 @@ def collect(
     if not discovered:
         raise ValueError("No program links found on the Academic Programs index")
     programs = select_programs(discovered, level, selected_programs)
+    eligible_program_count = len(select_programs(discovered, level, None))
     if len(programs) > max_programs:
         raise RuntimeError(
             f"Academic Programs index contains {len(programs)} {level} programs; "
@@ -229,6 +230,7 @@ def collect(
         "base_url": base_url,
         "level": level,
         "discovered_program_count": len(discovered),
+        "eligible_program_count": eligible_program_count,
         "collected_program_count": len(records),
         "program_index": response_record(index_url, index_response, index_path),
         "programs": records,
