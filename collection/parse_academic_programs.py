@@ -58,6 +58,9 @@ REQUIREMENT_COLUMNS = (
     "requirement_kind",
     "course_codes",
     "raw_cells",
+    "source_page_title",
+    "source_url",
+    "source_file",
 )
 PROGRAM_COURSE_COLUMNS = (
     "program_id",
@@ -68,6 +71,9 @@ PROGRAM_COURSE_COLUMNS = (
     "requirement_kind",
     "credits",
     "requirement_text",
+    "source_page_title",
+    "source_url",
+    "source_file",
 )
 
 
@@ -285,7 +291,11 @@ def requirement_kind(text: str, codes: list[str]) -> str:
 
 
 def parse_program_page(
-    body: bytes, *, program: dict[str, Any], collected_at: str
+    body: bytes,
+    *,
+    program: dict[str, Any],
+    collected_at: str,
+    requirement_namespace: str = "",
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     parser = ProgramPageParser()
     parser.feed(body.decode("utf-8"))
@@ -302,8 +312,12 @@ def parse_program_page(
     }
     requirements: list[dict[str, Any]] = []
     mentions: list[dict[str, Any]] = []
+    source_page_title = clean(parser.page_title_parts)
+    id_prefix = program["program_id"]
+    if requirement_namespace:
+        id_prefix += f":{requirement_namespace}"
     for number, block in enumerate(parser.blocks, start=1):
-        requirement_id = f"{program['program_id']}:{number}"
+        requirement_id = f"{id_prefix}:{number}"
         codes = block.pop("course_codes")
         row = {
             "requirement_id": requirement_id,
@@ -312,6 +326,9 @@ def parse_program_page(
             "requirement_kind": requirement_kind(block["requirement_text"], codes),
             "course_codes": "|".join(codes),
             "raw_cells": json.dumps(block["raw_cells"], ensure_ascii=False),
+            "source_page_title": source_page_title,
+            "source_url": program["response_url"],
+            "source_file": program["file"],
         }
         requirements.append(row)
         mentions.extend(
@@ -324,6 +341,9 @@ def parse_program_page(
                 "requirement_kind": row["requirement_kind"],
                 "credits": row["credits"],
                 "requirement_text": row["requirement_text"],
+                "source_page_title": source_page_title,
+                "source_url": program["response_url"],
+                "source_file": program["file"],
             }
             for code in codes
         )
@@ -424,6 +444,24 @@ def parse_run(
         programs.append(program_row)
         requirements.extend(program_requirements)
         mentions.extend(program_mentions)
+        for related in program.get("related_pages", []):
+            related_path = resolve_project_path(related["file"])
+            related_body = related_path.read_bytes()
+            if hashlib.sha256(related_body).hexdigest() != related["sha256"]:
+                raise ValueError(f"Hash mismatch for {related_path}")
+            related_program = {
+                **program,
+                "response_url": related["response_url"],
+                "file": related["file"],
+            }
+            _, related_requirements, related_mentions = parse_program_page(
+                related_body,
+                program=related_program,
+                collected_at=manifest["collected_at"],
+                requirement_namespace=related["slug"],
+            )
+            requirements.extend(related_requirements)
+            mentions.extend(related_mentions)
 
     output = resolve_project_path(config["output_directory"])
     atomic_write_csv(output / config["programs_csv"], PROGRAM_COLUMNS, programs)

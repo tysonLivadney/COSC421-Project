@@ -26,6 +26,12 @@
     "retry_delay_seconds": 10,
     "request_delay_seconds": 10,
     "max_programs": 200,
+    "max_related_pages_per_program": 20,
+    "related_page_title_patterns": [
+      "degree requirements",
+      "diploma requirements",
+      "program requirements"
+    ],
     "user_agent": "COSC421-Project/0.1 (educational research)"
   },
   "academic_program_parsing": {

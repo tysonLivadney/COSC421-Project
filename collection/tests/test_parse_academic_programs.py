@@ -57,6 +57,15 @@ class AcademicProgramParserTests(unittest.TestCase):
             source = run / "programs" / "17037.html"
             source.parent.mkdir(parents=True)
             source.write_bytes(self.body)
+            related_body = (
+                b'<h1 class="page-title">Shared Degree Requirements</h1>'
+                b'<div class="field--name-body"><table>'
+                b'<tr><td>STAT_O 230</td><td>3</td></tr>'
+                b'</table></div>'
+            )
+            related_source = run / "related" / "17037" / "degree-requirements.html"
+            related_source.parent.mkdir(parents=True)
+            related_source.write_bytes(related_body)
             index = run / "program_index.html"
             index.write_text(
                 '<table><tr><td><a href="/node/17037">Computer Science (B.Sc.)</a></td>'
@@ -75,6 +84,15 @@ class AcademicProgramParserTests(unittest.TestCase):
                         **self.program,
                         "file": source.as_posix(),
                         "sha256": hashlib.sha256(self.body).hexdigest(),
+                        "related_pages": [
+                            {
+                                "title": "Degree Requirements",
+                                "slug": "degree-requirements",
+                                "response_url": "https://example.test/programs/computer-science/degree-requirements",
+                                "file": related_source.as_posix(),
+                                "sha256": hashlib.sha256(related_body).hexdigest(),
+                            }
+                        ],
                     }
                 ],
             }
@@ -95,6 +113,9 @@ class AcademicProgramParserTests(unittest.TestCase):
             with (output / "program_courses.csv").open(encoding="utf-8", newline="") as handle:
                 rows = list(csv.DictReader(handle))
             self.assertIn("COSC_O 123", {row["course_code"] for row in rows})
+            related = next(row for row in rows if row["course_code"] == "STAT_O 230")
+            self.assertEqual(related["source_page_title"], "Shared Degree Requirements")
+            self.assertIn(":degree-requirements:", related["requirement_id"])
 
 
 if __name__ == "__main__":

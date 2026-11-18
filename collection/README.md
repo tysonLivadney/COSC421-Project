@@ -45,6 +45,16 @@ Download all undergraduate program pages:
 python collection/collect_academic_programs.py
 ```
 
+Program-specific degree, diploma, and program requirement child pages are
+collected automatically.
+
+Add only missing child requirement pages to the newest complete collection:
+
+```powershell
+python collection/collect_academic_programs.py --related-only
+python collection/parse_academic_programs.py
+```
+
 Download one program while testing:
 
 ```powershell
