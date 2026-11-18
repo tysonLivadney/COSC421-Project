@@ -16,6 +16,18 @@
     "courses_csv": "courses.csv",
     "courses_jsonl": "courses.jsonl"
   },
+  "academic_program_collection": {
+    "base_url": "https://okanagan.calendar.ubc.ca",
+    "program_index_path": "academic-programs",
+    "raw_directory": "data/raw/academic_calendar/academic_programs",
+    "level": "Undergraduate",
+    "timeout_seconds": 30,
+    "retry_attempts": 3,
+    "retry_delay_seconds": 10,
+    "request_delay_seconds": 10,
+    "max_programs": 200,
+    "user_agent": "COSC421-Project/0.1 (educational research)"
+  },
   "course_schedule_collection": {
     "base_url": "https://courses.students.ubc.ca/jsonapi",
     "raw_directory": "data/raw/course_schedule",

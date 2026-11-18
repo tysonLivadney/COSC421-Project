@@ -10,6 +10,7 @@ and extract the run folders into:
 
 - Course Schedule: `data/raw/course_schedule/`
 - Academic Calendar: `data/raw/academic_calendar/course_descriptions/`
+- Academic Programs: `data/raw/academic_calendar/academic_programs/`
 
 Generate the processed files:
 
@@ -33,6 +34,20 @@ Download one subject while testing:
 
 ```powershell
 python collection/collect_academic_calendar.py --subject COSC_O
+```
+
+## Academic program collector
+
+Download all undergraduate program pages:
+
+```powershell
+python collection/collect_academic_programs.py
+```
+
+Download one program while testing:
+
+```powershell
+python collection/collect_academic_programs.py --program 17037
 ```
 
 ## Course Schedule collector
