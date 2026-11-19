@@ -45,6 +45,38 @@ Edges point from prerequisite to course, so out-degree is the "gateway" score.
 | `group_id` | Edges with the same `group_id` are alternatives ("one of"); a course needs every one of its groups |
 | `alternatives` | Number of courses in the edge's group; `1` means that exact course is required |
 
+## Loading a program
+
+`load_program()` joins one program's requirements onto the network. Pass the program's
+name as it appears in the Calendar (case doesn't matter). Any unique part of the name
+also works. If a name matches several programs, it stops and lists them. Names are in
+`data/processed/academic_calendar/academic_programs/programs.csv`, and that file's
+`program_id` also works.
+
+```r
+p <- load_program("Computer Science (B.Sc.)")   # uses load_network() unless you pass `g`
+p <- load_program("anthropology")
+p <- load_program("Economics (B.A.)", track = "Major")   # page lists both Major and Honours
+p$graph          # the network with program attributes added (below)
+p$requirements   # the program's requirement table rows, with year_min / year_max
+p$name           # "Computer Science (B.Sc.)"
+p$missing        # listed courses that aren't in the network (e.g. retired courses)
+```
+
+Only rows from the Calendar's requirement *tables* are used. Paragraph and list rows mix
+real requirements with notes like "COSC 101 is recommended".
+
+### Program vertex attributes
+
+| Attribute | Meaning |
+|---|---|
+| `role` | `required`, `choice` (pick from a listed set), `elective list` (named in an elective/concentration row), or `not listed` |
+| `program_year_min`, `program_year_max` | Year(s) of the section the course is listed under; `3`-`4` for "Third and Fourth Years", `NA` if the section names no year |
+| `requirement_id` | Row in `requirements.csv` the role came from |
+
+A course listed more than once keeps its strongest role (required > choice > elective
+list) and the earliest year it's listed in.
+
 ## Figures
 
 Pass one or more subject codes (at least one is required):
