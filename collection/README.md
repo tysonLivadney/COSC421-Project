@@ -4,18 +4,20 @@ Python tools for collecting and converting project data.
 
 ## Data setup
 
-Download both snapshots from
+Download the snapshots from
 [GitHub Releases](https://github.com/tysonLivadney/COSC421-Project/releases/latest)
 and extract the run folders into:
 
 - Course Schedule: `data/raw/course_schedule/`
 - Academic Calendar: `data/raw/academic_calendar/course_descriptions/`
+- Academic Programs: `data/raw/academic_calendar/academic_programs/`
 
 Generate the processed files:
 
 ```powershell
 python collection/json_to_csv.py
 python collection/parse_academic_calendar.py
+python collection/parse_academic_programs.py
 ```
 
 Raw and processed data are not committed to Git. Processed files can always be
@@ -33,6 +35,36 @@ Download one subject while testing:
 
 ```powershell
 python collection/collect_academic_calendar.py --subject COSC_O
+```
+
+## Academic program collector
+
+Download all undergraduate program pages:
+
+```powershell
+python collection/collect_academic_programs.py
+```
+
+Program-specific degree, diploma, and program requirement child pages are
+collected automatically.
+
+Add only missing child requirement pages to the newest complete collection:
+
+```powershell
+python collection/collect_academic_programs.py --related-only
+python collection/parse_academic_programs.py
+```
+
+Download one program while testing:
+
+```powershell
+python collection/collect_academic_programs.py --program 17037
+```
+
+Parse the newest complete program collection:
+
+```powershell
+python collection/parse_academic_programs.py
 ```
 
 ## Course Schedule collector
