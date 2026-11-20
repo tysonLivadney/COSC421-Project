@@ -13,6 +13,7 @@ load_network <- function(dir = "data/processed/network",
   edges <- read.csv(paths[2], stringsAsFactors = FALSE)
 
   edges$alternatives <- as.vector(table(edges$group_id)[as.character(edges$group_id)])
+  edges$required <- edges$alternatives == 1 & is.na(edges$alternative_year)
   edges <- edges[edges$type %in% types, ]
 
   nodes$label <- sub("_O ", " ", nodes$course_code)
@@ -23,7 +24,7 @@ load_network <- function(dir = "data/processed/network",
   if (simplify) {
     # "Either" requirements put some pairs in several groups; keep the strictest.
     g <- simplify(g, remove.loops = TRUE, edge.attr.comb = list(
-      alternatives = "min", group_id = "first", type = "first", "ignore"))
+      alternatives = "min", required = "max", group_id = "first", type = "first", "ignore"))
   }
   g
 }

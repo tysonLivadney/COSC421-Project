@@ -26,6 +26,18 @@ CONNECTORS = re.compile(
     r"\b(?:either|one of|all of|two of|and|or)\b|\([a-z]\)|[.,;]", re.IGNORECASE
 )
 MAX_CLAUSES = 64
+# High-school courses ("MATH 12", "Pre-Calculus 12", "Physics 11").
+HIGH_SCHOOL = re.compile(r"\b(?:[A-Z]{2,5}|[A-Z][a-z]+)\s+1[12]\b")
+# Leaf tokens for requirements that aren't courses. NON_COURSE stands in for any other
+# alternative (high school, permission, credit counts) inside a "one of" group.
+NON_COURSE = "*"
+STANDING = re.compile(r"\b(first|second|third|fourth|fifth)[- ]year\b.*?standing", re.IGNORECASE)
+YEARS = {"first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5}
+
+
+def standing(text: str) -> str | None:
+    match = STANDING.search(text)
+    return f"STANDING:{YEARS[match.group(1).lower()]}" if match else None
 
 
 def courses_in(text: str) -> list[str]:
@@ -61,17 +73,26 @@ def parse(text: str):
         return node("and", re.split(r"\band\b", text))
     codes = courses_in(text)
     if not codes:
-        return None
+        return standing(text)
     is_all_of = re.search(r"\ball of\b", text, re.IGNORECASE)
     is_list = re.search(r"\b(one|two) of\b|\bor\b", text, re.IGNORECASE)
     op = "or" if is_list and not is_all_of else "and"
+    if op == "or":
+        options = [o for o in re.split(r"\bor\b(?!\s+higher)", text) if o.strip(" .;,")]
+        others = [standing(o) or NON_COURSE for o in options if not COURSE_REF.search(o)]
+        codes.extend(sorted(set(others)))
+        if HIGH_SCHOOL.search(text):
+            codes.append(NON_COURSE)
     return (op, codes) if len(codes) > 1 else codes[0]
 
 
 def node(op: str, parts: list[str]):
-    children = [c for c in map(parse, parts) if c is not None]
+    parsed = [parse(part) for part in parts if part.strip(" .;,")]
+    children = [c for c in parsed if c is not None]
     if not children:
         return None
+    if len(children) < len(parsed):
+        children.append(NON_COURSE)
     return (op, children) if len(children) > 1 else children[0]
 
 
@@ -102,7 +123,7 @@ def unparsed(text: str) -> str:
 
 
 def build(courses: list[dict[str, str]]) -> tuple[list[dict], list[dict]]:
-    edges, notes, group_id = [], {}, 0
+    edges, notes, standings, group_id = [], {}, {}, 0
     for course in courses:
         target = course["course_code"]
         leftovers = []
@@ -111,12 +132,17 @@ def build(courses: list[dict[str, str]]) -> tuple[list[dict], list[dict]]:
             if not text:
                 continue
             for clause in to_cnf(parse(text)):
-                clause = clause - {target}
+                tokens = {t for t in clause if t == NON_COURSE or t.startswith("STANDING:")}
+                years = [1 if t == NON_COURSE else int(t.split(":")[1]) for t in tokens]
+                clause = clause - tokens - {target}
                 if not clause:
+                    if kind == "prereq" and NON_COURSE not in tokens and years:
+                        standings[target] = max(standings.get(target, 0), min(years))
                     continue
                 group_id += 1
                 edges.extend(
-                    {"from": src, "to": target, "type": kind, "group_id": group_id}
+                    {"from": src, "to": target, "type": kind, "group_id": group_id,
+                     "alternative_year": min(years) if years else ""}
                     for src in sorted(clause)
                 )
             if rest := unparsed(text):
@@ -133,6 +159,7 @@ def build(courses: list[dict[str, str]]) -> tuple[list[dict], list[dict]]:
             "title": c["title"],
             "in_calendar": True,
             "unparsed_text": notes.get(c["course_code"], ""),
+            "min_standing": standings.get(c["course_code"], ""),
         }
         for c in courses
     }
@@ -143,7 +170,7 @@ def build(courses: list[dict[str, str]]) -> tuple[list[dict], list[dict]]:
             nodes[code] = {
                 "course_code": code, "subject_code": subject, "course_number": number,
                 "year_level": int(number[0]), "credits": "", "title": "",
-                "in_calendar": False, "unparsed_text": "",
+                "in_calendar": False, "unparsed_text": "", "min_standing": "",
             }
     return list(nodes.values()), edges
 

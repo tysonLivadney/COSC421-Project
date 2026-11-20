@@ -35,7 +35,8 @@ Edges point from prerequisite to course, so out-degree is the "gateway" score.
 | `year_level` | First digit of the course number |
 | `credits`, `title` | From the Calendar |
 | `in_calendar` | `FALSE` for prerequisites that are no longer listed in the Calendar |
-| `unparsed_text` | Requirement text the parser ignored (standing, permission, credit counts, high-school courses) |
+| `unparsed_text` | Requirement text that isn't a UBC course (standing, permission, credit counts, high-school courses), for review |
+| `min_standing` | Year standing the course strictly requires ("and third-year standing" → `3`), `NA` if none |
 
 ### Edge attributes
 
@@ -43,7 +44,9 @@ Edges point from prerequisite to course, so out-degree is the "gateway" score.
 |---|---|
 | `type` | `prereq` or `coreq` |
 | `group_id` | Edges with the same `group_id` are alternatives ("one of"); a course needs every one of its groups |
-| `alternatives` | Number of courses in the edge's group; `1` means that exact course is required |
+| `alternatives` | Number of courses in the edge's group |
+| `alternative_year` | If the group can also be satisfied without a course (standing, high school, permission, ...), the earliest year that option is available: `1` for high school/permission, `N` for N-year standing. `NA` if a course is the only way |
+| `required` | `TRUE` when this exact course is the only way to satisfy its group (`alternatives == 1` and no `alternative_year`) |
 
 ## Loading a program
 
@@ -84,10 +87,20 @@ Pass one or more subject codes (at least one is required):
 ```bash
 Rscript analysis/viz.R COSC
 Rscript analysis/viz.R COSC ENGL STAT
+Rscript analysis/viz.R COSC --program "Computer Science (B.Sc.)"
 ```
 
-Each run writes the calendar-wide figures to `figures/` and one folder per subject
-(e.g. `figures/cosc/`):
+Pass any number of subjects and `--program "NAME"` options (program names work as in
+`load_program()`); at least one of either is required. Each run writes the
+calendar-wide figures to `figures/`, plus one folder per subject under
+`figures/subjects/` and one per program under `figures/programs/`:
+
+```
+figures/
+├── gateways.png, bridges.png, degree_distribution.png, subject_heatmap.png
+├── subjects/cosc/                      gateways, bridges, chain, failure_impact
+└── programs/computer-science-b-sc/     credits_by_year, slack
+```
 
 | File | Shows |
 |---|---|
@@ -95,22 +108,49 @@ Each run writes the calendar-wide figures to `figures/` and one folder per subje
 | `bridges.png` | Top 15 courses by betweenness, whole calendar |
 | `degree_distribution.png` | In- and out-degree distributions (log-log) |
 | `subject_heatmap.png` | Prerequisite links between subjects (prerequisite subject → course subject) |
-| `<subject>/gateways.png` | The subject's courses plus all their prerequisites, node size = out-degree |
-| `<subject>/bridges.png` | Same network, node size = betweenness |
-| `<subject>/chain.png` | Longest prerequisite chain in the subject, highlighted |
-| `<subject>/failure_impact.png` | For each course in the subject: courses downstream vs. courses blocked if you fail it |
+| `subjects/<subject>/gateways.png` | The subject's courses plus all their prerequisites, node size = out-degree |
+| `subjects/<subject>/bridges.png` | Same network, node size = betweenness |
+| `subjects/<subject>/chain.png` | Longest prerequisite chain in the subject, highlighted |
+| `subjects/<subject>/failure_impact.png` | For each course in the subject: courses downstream vs. courses blocked if you fail it |
+| `programs/<program>/credits_by_year.png` | Required / choose-from-a-list / elective credits in each year of the program |
+| `programs/<program>/slack.png` | For each required course, the earliest and latest term it can start |
 
 "Blocked" means no alternative is left: a course is blocked when every option in one
 of its "one of" groups is blocked. Courses that can still be reached another way count
 as downstream only.
 
-Dashed edges are "one of several" alternatives; solid edges are required. The chosen
+Dashed edges have alternatives; solid edges are required (the `required` attribute). The chosen
 subject is always blue; the next two most common subjects get the other colours and
 the rest are grey "Other", so the colours stay colour-blind safe.
 
 In the network plots, interchangeable courses (same prerequisites, unlock the same
 courses) are drawn as one node, e.g. "ENGL 109 (+8 alt.)". Metrics are computed
 before merging.
+
+### Credits by year
+
+Credits come from the program's requirement tables. Electives are the year's "Total
+Credits" minus required and choose-from-a-list credits, so alternative elective rows
+(e.g. the four COSC concentrations) aren't double counted. Rows under a section that
+names no year are shown as "Year not given" rather than dropped. B.A. programs only list
+the major's requirements, so their totals are the major's credits, not the whole degree.
+
+### Slack
+
+Terms are numbered Y1 T1 to Y4 T2 (two terms a year, no summer) and every course is
+assumed to be offered every term.
+
+- **Earliest start:** the term after the quickest way through each prerequisite group,
+  and no earlier than the course's required standing. A non-course option (high
+  school, standing) counts as a way through.
+- **Latest start:** the end of the program year the course is listed in, moved earlier
+  for any later required course that strictly needs it.
+- 6+ credit courses (e.g. COSC 499) run September to April, so they take two terms and
+  start in term 1.
+
+"No slack" courses have to be taken in exactly that term to finish in four years;
+failing one delays graduation. For B.Sc. Computer Science this reproduces the
+Calendar's note that COSC 304, 310 and 341 must be taken in third year.
 
 From R, pick the chain's end course or plot any subgraph:
 
@@ -124,8 +164,12 @@ longest_path(g, "COSC_O 499")
 
 ## Known limitations
 
-- Non-course alternatives are dropped. For "COSC 310 or fourth-year standing", COSC 310
-  becomes a required edge, and the standing alternative is kept in `unparsed_text`.
+- Non-course requirements other than standing (permission, credit counts like "6
+  credits of HIST", grades) aren't modelled beyond `alternative_year`. Their text is
+  kept in `unparsed_text`.
+- Some program pages file later years under a section with no year (e.g. Mathematics
+  (B.Sc.)), and engineering programs start at second year (first year is a common
+  program on another page).
 - Courses that list many options ("one of ENGL 109, 112, 114, ...") have high raw
   out-degree. To weight each edge by how required it is, use
   `strength(g, mode = "out", weights = 1 / E(g)$alternatives)`.
