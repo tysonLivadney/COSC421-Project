@@ -290,7 +290,9 @@ latest_terms <- function(g_raw, program, required) {
   duration <- course_terms(g_raw)
   v <- V(program$graph)
   last_year <- setNames(v$program_year_max, v$name)[required]
-  last_year[is.na(last_year)] <- max(v$program_year_max, na.rm = TRUE)
+  # Programs that name no years are treated as 4-year degrees.
+  last_year[is.na(last_year)] <- max(c(v$program_year_max, if (all(is.na(v$program_year_max))) 4),
+                                     na.rm = TRUE)
   latest <- 2 * last_year - duration[required] + 1
   order <- as_ids(topo_sort(g_raw))
   for (course in rev(order[order %in% required])) {
@@ -374,12 +376,94 @@ plot_slack <- function(g_raw, program, file) {
   invisible(df)
 }
 
+# What `start` needs beyond the `covered` courses: courses that are the only option in a
+# group (followed further back), and "one of" groups none of whose options the program lists.
+unmet_prerequisites <- function(groups, start, covered, listed) {
+  found <- list()
+  queue <- start
+  while (length(queue)) {
+    course <- queue[1]
+    queue <- queue[-1]
+    for (grp in groups[[course]]) {
+      options <- grp$courses
+      if (!is.na(grp$alternative_year) || any(options %in% covered)) next
+      if (length(options) == 1) {
+        found[[length(found) + 1]] <- data.frame(needs = options, one_of = FALSE)
+        covered <- c(covered, options)
+        queue <- c(queue, options)
+      } else if (!any(options %in% listed)) {
+        found[[length(found) + 1]] <- data.frame(needs = paste(sort(options), collapse = "|"),
+                                                 one_of = TRUE)
+      }
+    }
+  }
+  if (length(found)) unique(do.call(rbind, found)) else NULL
+}
+
+hidden_prerequisites <- function(g_raw, program) {
+  role <- setNames(V(program$graph)$role, V(program$graph)$name)
+  role <- role[names(role) %in% V(g_raw)$name]
+  groups <- prereq_groups(g_raw)
+  required <- names(role)[role == "required"]
+  listed <- names(role)[role != "not listed"]
+  # Students take every required course, so whatever those force counts as covered for the rest.
+  from_required <- do.call(rbind, lapply(required, function(r)
+    unmet_prerequisites(groups, r, required, listed)))
+  forced <- c(required, if (!is.null(from_required)) from_required$needs[!from_required$one_of])
+  rows <- lapply(listed, function(course) {
+    covered <- if (role[[course]] == "required") required else forced
+    found <- unmet_prerequisites(groups, course, covered, listed)
+    if (!is.null(found)) cbind(course = course, found)
+  })
+  df <- do.call(rbind, rows)
+  if (is.null(df)) return(NULL)
+  df$course_role <- role[df$course]
+  df$needs_role <- ifelse(df$one_of, "not listed", role[df$needs])
+  df
+}
+
+plot_hidden_prerequisites <- function(g_raw, program, file) {
+  df <- hidden_prerequisites(g_raw, program)
+  title <- sprintf("%s: prerequisites the program doesn't list", program$name)
+  if (is.null(df)) {
+    p <- ggplot() + annotate("text", x = 0, y = 0, label = "None found", colour = MUTED) +
+      labs(title = title) + theme_void()
+    return(ggsave(file, p, width = 7, height = 2, dpi = 200))
+  }
+  label <- function(codes) gsub("_O ", " ", gsub("|", " or ", codes, fixed = TRUE))
+  note <- c(required = "", choice = " (a choice)", `elective list` = " (elective)", `not listed` = "")
+  df$row <- paste0(label(df$course), note[df$course_role])
+  df$need <- paste0(label(df$needs), note[df$needs_role])
+  df$kind <- ifelse(df$one_of, "One of these", "Only option")
+  df <- df[order(match(df$course_role, c("required", "choice", "elective list")), df$course,
+                 df$one_of), ]
+  df$row <- factor(df$row, rev(unique(df$row)))
+  df$slot <- ave(seq_len(nrow(df)), df$row, FUN = seq_along)
+  p <- ggplot(df, aes(slot, row, label = need, fill = kind)) +
+    geom_label(hjust = 0, size = 3.4, linewidth = 0, label.padding = unit(0.35, "lines"),
+               colour = INK) +
+    scale_fill_manual(values = c(`Only option` = "#f2a07c", `One of these` = "#fbd9c8"),
+                      name = "Also needs", breaks = c("Only option", "One of these")) +
+    scale_x_continuous(limits = c(1, max(df$slot) + 1.6), expand = c(0, 0.05)) +
+    guides(fill = guide_legend(override.aes = list(label = "    "))) +
+    labs(title = title,
+         subtitle = sprintf("%d of the program's courses need a course it doesn't require",
+                            length(unique(df$course))),
+         x = NULL, y = NULL) +
+    theme_net() +
+    theme(panel.grid.major.x = element_blank(), axis.text.x = element_blank(),
+          legend.position = "top", legend.justification = "left")
+  ggsave(file, p, width = 8, height = 1.8 + 0.4 * length(unique(df$row)), dpi = 200)
+}
+
 program_figures <- function(g, program_name, dir = "figures/programs") {
   program <- load_program(program_name, g)
   folder <- file.path(dir, gsub("^-|-$", "", gsub("[^a-z0-9]+", "-", tolower(program$name))))
   dir.create(folder, showWarnings = FALSE, recursive = TRUE)
   plot_credits_by_year(program, file.path(folder, "credits_by_year.png"))
-  plot_slack(load_network(simplify = FALSE), program, file.path(folder, "slack.png"))
+  g_raw <- load_network(simplify = FALSE)
+  plot_slack(g_raw, program, file.path(folder, "slack.png"))
+  plot_hidden_prerequisites(g_raw, program, file.path(folder, "hidden_prerequisites.png"))
 }
 
 subject_figures <- function(g, subject, target = NULL, dir = "figures/subjects") {

@@ -99,7 +99,7 @@ calendar-wide figures to `figures/`, plus one folder per subject under
 figures/
 ├── gateways.png, bridges.png, degree_distribution.png, subject_heatmap.png
 ├── subjects/cosc/                      gateways, bridges, chain, failure_impact
-└── programs/computer-science-b-sc/     credits_by_year, slack
+└── programs/computer-science-b-sc/     credits_by_year, slack, hidden_prerequisites
 ```
 
 | File | Shows |
@@ -114,6 +114,7 @@ figures/
 | `subjects/<subject>/failure_impact.png` | For each course in the subject: courses downstream vs. courses blocked if you fail it |
 | `programs/<program>/credits_by_year.png` | Required / choose-from-a-list / elective credits in each year of the program |
 | `programs/<program>/slack.png` | For each required course, the earliest and latest term it can start |
+| `programs/<program>/hidden_prerequisites.png` | Courses the program lists that need a course it doesn't require |
 
 "Blocked" means no alternative is left: a course is blocked when every option in one
 of its "one of" groups is blocked. Courses that can still be reached another way count
@@ -151,6 +152,23 @@ assumed to be offered every term.
 "No slack" courses have to be taken in exactly that term to finish in four years;
 failing one delays graduation. For B.Sc. Computer Science this reproduces the
 Calendar's note that COSC 304, 310 and 341 must be taken in third year.
+
+### Hidden prerequisites
+
+For each course the program lists (required, choice or elective), this shows what else it
+needs that the program doesn't cover:
+
+- **Only option:** a prerequisite with no alternative, followed further back (e.g. COSC 444
+  needs COSC 344).
+- **One of these:** a "one of" group where the program lists none of the options (e.g.
+  COSC 344 needs APSC 248 or MATH 200).
+
+Required courses are checked against the other required courses. Choices and electives
+are checked against everything a student is already forced to take. A listed choice can
+show up as a need: COSC 270 needs COSC 111, which fixes the program's "COSC 111 or 123"
+choice.
+
+Programs with no requirement tables in the Calendar (24 of 73) have no program figures.
 
 From R, pick the chain's end course or plot any subgraph:
 
