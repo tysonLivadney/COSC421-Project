@@ -67,7 +67,9 @@ p$missing        # listed courses that aren't in the network (e.g. retired cours
 ```
 
 Only rows from the Calendar's requirement *tables* are used. Paragraph and list rows mix
-real requirements with notes like "COSC 101 is recommended".
+real requirements with notes like "COSC 101 is recommended". Some tables put year
+headings ("Second Year") in a row of their own instead of in the section name; that year
+is applied to the rows after it in the same section.
 
 ### Program vertex attributes
 
@@ -97,7 +99,7 @@ calendar-wide figures to `figures/`, plus one folder per subject under
 
 ```
 figures/
-├── gateways.png, bridges.png, degree_distribution.png, subject_heatmap.png
+├── gateways.png, bridges.png, degree_distribution.png, subject_heatmap.png, program_comparison.png
 ├── subjects/cosc/                      gateways, bridges, chain, failure_impact
 └── programs/computer-science-b-sc/     credits_by_year, slack, hidden_prerequisites
 ```
@@ -108,6 +110,7 @@ figures/
 | `bridges.png` | Top 15 courses by betweenness, whole calendar |
 | `degree_distribution.png` | In- and out-degree distributions (log-log) |
 | `subject_heatmap.png` | Prerequisite links between subjects (prerequisite subject → course subject) |
+| `program_comparison.png` | Share of each program's credits that are required, chosen from a list, or electives |
 | `subjects/<subject>/gateways.png` | The subject's courses plus all their prerequisites, node size = out-degree |
 | `subjects/<subject>/bridges.png` | Same network, node size = betweenness |
 | `subjects/<subject>/chain.png` | Longest prerequisite chain in the subject, highlighted |
@@ -135,6 +138,19 @@ Credits" minus required and choose-from-a-list credits, so alternative elective 
 (e.g. the four COSC concentrations) aren't double counted. Rows under a section that
 names no year are shown as "Year not given" rather than dropped. B.A. programs only list
 the major's requirements, so their totals are the major's credits, not the whole degree.
+
+### Program comparison
+
+Uses the same credit counts as credits by year, for every program whose requirement
+tables are complete enough to compare. That means every year has a total, required +
+choice doesn't exceed it, no credits fall under "Year not given", and the years add up
+to 90–130 credits (one degree, not a major plus a separate whole-degree table). 14 of
+the 49 programs with tables pass. Most B.A. pages fail the last check, and pages that
+list alternative options in one table (e.g. Biochemistry) fail the total check.
+Engineering programs start at second year and are labelled "(from year 2)".
+
+Pages with several tracks are compared on their first Major (e.g. Economics' Major, not
+its Honours); pages without a Major drop their Honours and Minor tracks.
 
 ### Slack
 

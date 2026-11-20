@@ -312,9 +312,9 @@ period_label <- function(from, to) {
          ifelse(from == to, paste("Year", from), paste0("Years ", from, "-", to)))
 }
 
-plot_credits_by_year <- function(program, file) {
-  # Rows whose section names no year get their own bar rather than being dropped.
-  reqs <- program$requirements
+# Credits per year by kind. Rows whose section names no year get their own period rather
+# than being dropped; `has_total` says whether the period's credits came from a total row.
+credits_by_period <- function(reqs) {
   reqs <- reqs[order(reqs$year_min, as.numeric(reqs$position), na.last = TRUE), ]
   reqs$period <- period_label(reqs$year_min, reqs$year_max)
   rows <- lapply(unique(reqs$period), function(period) {
@@ -323,10 +323,15 @@ plot_credits_by_year <- function(program, file) {
     total <- r$credits[r$requirement_kind == "total"][1]
     fixed <- c(Required = credits("course"), `Choose from a list` = credits("course_choice"))
     electives <- if (is.na(total)) credits("elective") else max(total - sum(fixed), 0)
-    data.frame(period = period, kind = c(names(fixed), "Electives"), credits = c(fixed, electives))
+    data.frame(period = period, kind = c(names(fixed), "Electives"), credits = c(fixed, electives),
+               has_total = !is.na(total), total = total)
   })
   df <- do.call(rbind, rows)
-  df <- df[ave(df$credits, df$period, FUN = sum) > 0, ]
+  df[ave(df$credits, df$period, FUN = sum) > 0, ]
+}
+
+plot_credits_by_year <- function(program, file) {
+  df <- credits_by_period(program$requirements)
   df$period <- factor(df$period, unique(df$period))
   df$kind <- factor(df$kind, c("Electives", "Choose from a list", "Required"))
   fixed <- sum(df$credits[df$kind != "Electives"])
@@ -456,6 +461,70 @@ plot_hidden_prerequisites <- function(g_raw, program, file) {
   ggsave(file, p, width = 8, height = 1.8 + 0.4 * length(unique(df$row)), dpi = 200)
 }
 
+# Pages that list several tracks: use the first Major, otherwise drop Honours and Minors.
+default_track <- function(sections) {
+  tops <- unique(sub(" > .*", "", sections))
+  if (length(tops) < 2) return(NULL)
+  major <- grep("\\bMajor\\b", tops, value = TRUE)
+  keep <- if (length(major)) major[1] else grep("Honours|Minor", tops, value = TRUE, invert = TRUE)
+  paste0("^(", paste(gsub("([().])", "\\\\\\1", keep), collapse = "|"), ")")
+}
+
+# One row per program whose requirement tables give a complete, consistent degree:
+# every year has a total, required + choice doesn't exceed it, nothing is under "Year not
+# given", and the years add up to 90-130 credits.
+program_shares <- function(g) {
+  programs <- read.csv(file.path(PROGRAM_DIR, "programs.csv"), colClasses = "character")
+  reqs <- read.csv(file.path(PROGRAM_DIR, "requirements.csv"), colClasses = "character")
+  rows <- lapply(programs$program_id, function(id) {
+    sections <- reqs$section[reqs$program_id == id & reqs$source_type == "table"]
+    if (!length(sections)) return(NULL)
+    program <- load_program(id, g, track = default_track(sections))
+    d <- credits_by_period(program$requirements)
+    fixed <- tapply(d$credits[d$kind != "Electives"], d$period[d$kind != "Electives"], sum)
+    total <- tapply(d$total, d$period, `[`, 1)
+    ok <- nrow(d) > 0 && all(d$has_total) && !any(d$period == "Year not given") &&
+      all(fixed[names(total)] <= total) && sum(d$credits) >= 90 && sum(d$credits) <= 130
+    years <- program$requirements$year_min
+    first_year <- if (all(is.na(years))) NA else min(years, na.rm = TRUE)
+    data.frame(program = program$name, first_year = first_year, ok = ok,
+               kind = c("Required", "Choose from a list", "Electives"),
+               credits = vapply(c("Required", "Choose from a list", "Electives"),
+                                function(k) sum(d$credits[d$kind == k]), numeric(1)))
+  })
+  do.call(rbind, rows)
+}
+
+plot_program_comparison <- function(g, file) {
+  all <- program_shares(g)
+  df <- all[all$ok, ]
+  df$program <- ifelse(df$first_year > 1, sprintf("%s (from year %d)", df$program, df$first_year),
+                       df$program)
+  df$share <- 100 * df$credits / ave(df$credits, df$program, FUN = sum)
+  fixed <- tapply(df$share[df$kind != "Electives"], df$program[df$kind != "Electives"], sum)
+  df$program <- factor(df$program, names(sort(fixed)))
+  df$kind <- factor(df$kind, c("Electives", "Choose from a list", "Required"))
+  p <- ggplot(df, aes(share, program, fill = kind)) +
+    geom_col(width = 0.7, colour = "#fcfcfb", linewidth = 0.4) +
+    geom_text(data = data.frame(program = names(fixed), share = as.numeric(fixed)),
+              aes(x = 101, y = program, label = sprintf("%.0f%%", share)), inherit.aes = FALSE,
+              hjust = 0, size = 3.2, colour = INK) +
+    scale_fill_manual(values = c(Required = PALETTE[1], `Choose from a list` = PALETTE[2],
+                                 Electives = "#d9d8d3"),
+                      breaks = c("Required", "Choose from a list", "Electives"), name = NULL) +
+    scale_x_continuous(limits = c(0, 108), breaks = seq(0, 100, 25),
+                       labels = function(x) paste0(x, "%"), expand = c(0, 0)) +
+    labs(title = "How much of each degree is fixed",
+         subtitle = sprintf("Share of credits; the %d of %d programs with complete requirement tables",
+                            length(unique(df$program)), length(unique(all$program))),
+         x = NULL, y = NULL) +
+    theme_net() +
+    theme(panel.grid.major.y = element_blank(), legend.position = "top",
+          legend.justification = "left")
+  p <- p + theme(plot.title.position = "plot")
+  ggsave(file, p, width = 8.5, height = 2 + 0.32 * length(unique(df$program)), dpi = 200)
+}
+
 program_figures <- function(g, program_name, dir = "figures/programs") {
   program <- load_program(program_name, g)
   folder <- file.path(dir, gsub("^-|-$", "", gsub("[^a-z0-9]+", "-", tolower(program$name))))
@@ -506,6 +575,7 @@ if (sys.nframe() == 0) {
            "figures/bridges.png")
   plot_degree_distribution(g, "figures/degree_distribution.png")
   plot_subject_heatmap(g, "figures/subject_heatmap.png")
+  plot_program_comparison(g, "figures/program_comparison.png")
   for (subject in subjects) subject_figures(g, subject)
   for (program in programs) program_figures(g, program)
   cat("Wrote", length(list.files("figures", recursive = TRUE)), "files to figures/\n")

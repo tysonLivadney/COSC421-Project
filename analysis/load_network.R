@@ -65,7 +65,17 @@ load_program <- function(program, g = load_network(), track = NULL, dir = PROGRA
   if (!is.null(track)) reqs <- reqs[grepl(track, reqs$section, ignore.case = TRUE), ]
   if (!nrow(reqs)) stop("No requirement tables for program ", program_id)
   reqs$credits <- as.numeric(reqs$credits)
+  reqs <- reqs[order(as.numeric(reqs$position)), ]
   years <- t(vapply(reqs$section, section_years, numeric(2), USE.NAMES = FALSE))
+  # Some tables put year headings ("Second Year") in a row of their own; that year applies
+  # to the rows after it in the same section.
+  heading <- reqs$requirement_kind == "other" & grepl("^\\W*(\\w+ (and|to) )?\\w+ years?\\W*$",
+                                                      tolower(reqs$requirement_text))
+  for (i in seq_len(nrow(reqs))[-1]) {
+    same_section <- reqs$section[i] == reqs$section[i - 1]
+    if (heading[i]) years[i, ] <- section_years(paste("x >", reqs$requirement_text[i]))
+    else if (same_section && is.na(years[i, 1])) years[i, ] <- years[i - 1, ]
+  }
   reqs$year_min <- years[, 1]
   reqs$year_max <- years[, 2]
 
