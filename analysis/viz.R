@@ -14,7 +14,8 @@ theme_net <- function() {
       plot.subtitle = element_text(colour = MUTED),
       panel.grid.minor = element_blank(),
       panel.grid.major = element_line(colour = "#e6e5e1", linewidth = 0.3),
-      plot.background = element_rect(fill = "#fcfcfb", colour = NA)
+      plot.background = element_rect(fill = "#fcfcfb", colour = NA),
+      plot.title.position = "plot"
     )
 }
 
@@ -100,7 +101,7 @@ plot_network <- function(g, size_by, title, file, layout = layout_with_kk(g), n_
   edges <- data.frame(
     x = nodes$x[ends[, 1]], y = nodes$y[ends[, 1]],
     xend = nodes$x[ends[, 2]], yend = nodes$y[ends[, 2]],
-    kind = ifelse(E(g)$alternatives > 1, "one of several", "required"),
+    kind = ifelse(E(g)$required, "required", "has alternatives"),
     on_path = if (is.null(highlight)) FALSE else E(g) %in% E(g, path = highlight)
   )
   # Stop each edge just outside its target node. Point sizes are in mm, so convert
@@ -139,7 +140,7 @@ plot_network <- function(g, size_by, title, file, layout = layout_with_kk(g), n_
     scale_size_identity() +
     scale_colour_manual(values = c(`FALSE` = alpha(MUTED, 0.4), `TRUE` = INK), guide = "none") +
     scale_linewidth_manual(values = c(`FALSE` = 0.3, `TRUE` = 1.1), guide = "none") +
-    scale_linetype_manual(values = c(required = "solid", `one of several` = "22"), name = NULL) +
+    scale_linetype_manual(values = c(required = "solid", `has alternatives` = "22"), name = NULL) +
     guides(fill = guide_legend(override.aes = list(size = 4))) +
     labs(title = title) +
     theme_void(base_size = 12) +
@@ -173,15 +174,10 @@ merge_equivalent <- function(g, values) {
   first <- !duplicated(groups)
   extra <- tabulate(groups) - 1
   merged <- contract(g, groups, vertex.attr.comb = "first")
-  merged <- simplify(merged, edge.attr.comb = list(alternatives = "min", "first"))
+  merged <- simplify(merged, edge.attr.comb = list(alternatives = "min", required = "max", "first"))
   V(merged)$label <- ifelse(extra > 0, sprintf("%s (+%d alt.)", V(merged)$label, extra),
                             V(merged)$label)
   list(graph = merged, values = as.vector(tapply(values, groups, max)))
-}
-
-plot_merged <- function(g, values, title, file, palette) {
-  m <- merge_equivalent(g, values)
-  plot_network(m$graph, m$values, title, file, palette = palette)
 }
 
 plot_subject_heatmap <- function(g, file, n = 15) {
@@ -208,69 +204,409 @@ plot_subject_heatmap <- function(g, file, n = 15) {
   ggsave(file, p, width = 9, height = 8, dpi = 200)
 }
 
-# A course is blocked when every alternative in one of its "one of" groups is blocked.
-failure_impact <- function(g_raw, courses) {
+prereq_groups <- function(g_raw) {
   e <- as_data_frame(g_raw)
-  groups <- lapply(split(e, e$to), function(d) split(d$from, d$group_id))
-  order <- as_ids(topo_sort(g_raw))
-  do.call(rbind, lapply(courses, function(course) {
-    downstream <- setdiff(as_ids(subcomponent(g_raw, course, mode = "out")), course)
-    blocked <- course
-    for (v in order[order %in% downstream]) {
-      if (any(vapply(groups[[v]], function(m) all(m %in% blocked), logical(1)))) {
-        blocked <- c(blocked, v)
-      }
-    }
-    data.frame(course = course, downstream = length(downstream), blocked = length(blocked) - 1)
-  }))
+  lapply(split(e, e$to), function(d) lapply(split(d, d$group_id), function(x)
+    list(courses = x$from, alternative_year = x$alternative_year[1])))
 }
 
-plot_failure_impact <- function(g_raw, subject, file, n = 15) {
-  courses <- V(g_raw)[subject == .env$subject & degree(g_raw, mode = "out") > 0]$name
-  impact <- failure_impact(g_raw, courses)
-  stopifnot(all(impact$blocked <= impact$downstream))
-  impact <- head(impact[order(-impact$blocked, -impact$downstream), ], n)
-  impact$label <- factor(sub("_O ", " ", impact$course), rev(sub("_O ", " ", impact$course)))
-  long <- rbind(
-    data.frame(label = impact$label, value = impact$downstream, kind = "Downstream (any route)"),
-    data.frame(label = impact$label, value = impact$blocked, kind = "Blocked (no alternative)")
-  )
-  long$kind <- factor(long$kind, c("Downstream (any route)", "Blocked (no alternative)"))
-  p <- ggplot(long, aes(value, label, fill = kind)) +
-    geom_col(position = position_identity(), width = 0.7) +
-    geom_text(data = long[long$kind == "Blocked (no alternative)", ],
-              aes(label = value), hjust = -0.3, colour = INK, size = 3.2) +
-    scale_fill_manual(values = c("#cde2fb", PALETTE[1]), name = NULL) +
-    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
-    labs(title = sprintf("If you fail a %s course", subject),
-         subtitle = "Courses anywhere in the calendar you can't take until you pass it",
-         x = "Courses", y = NULL) +
+# Everything the blocking and term calculations need, built once per run and passed
+# to the figure functions as `ix`.
+prereq_index <- function(g_raw = load_network(simplify = FALSE), offerings = load_offerings()) {
+  ix <- list(graph = g_raw, groups = prereq_groups(g_raw), duration = course_terms(g_raw),
+             order = as_ids(topo_sort(g_raw)))
+  # Terms each course can start in. Courses with no winter sections in the schedule data
+  # are assumed to run every term; two-term courses always start in term 1.
+  names <- V(g_raw)$name
+  ix$offered <- matrix(TRUE, length(names), 2, dimnames = list(names, c("T1", "T2")))
+  known <- intersect(names, rownames(offerings))
+  ix$offered[known, ] <- offerings[known, ]
+  ix$offered[ix$duration == 2, ] <- rep(c(TRUE, FALSE), each = sum(ix$duration == 2))
+  standing <- ifelse(is.na(V(g_raw)$min_standing), 1, V(g_raw)$min_standing)
+  ix$earliest <- propagate_starts(ix, setNames(2 * standing - 1, V(g_raw)$name), ix$order)
+  ix
+}
+
+# Terms are numbered 1-8 (two per year, no summer). 6+ credit courses run September to
+# April, so they take two terms and can only start in term 1 of a year (odd terms).
+# Moves `term` forward (step = 1) or back (step = -1) to a term `course` is offered in.
+offered_term <- function(ix, course, term, step = 1) {
+  while (!ix$offered[course, 2 - term %% 2]) term <- term + step
+  term
+}
+
+course_terms <- function(g) {
+  credits <- suppressWarnings(as.numeric(sub("-.*", "", V(g)$credits)))
+  setNames(ifelse(!is.na(credits) & credits >= 6, 2, 1), V(g)$name)
+}
+
+term_label <- function(term) sprintf("Y%d T%d", (term + 1) %/% 2, (term + 1) %% 2 + 1)
+
+# Pushes `start` forward through `courses` (in prerequisite order) so each starts after
+# the quickest way through each of its groups. `not_before` sets minimum starts.
+propagate_starts <- function(ix, start, courses, not_before = NULL) {
+  duration <- ix$duration
+  for (v in courses) {
+    for (grp in ix$groups[[v]]) {
+      via_course <- min(start[grp$courses] + duration[grp$courses])
+      via_other <- if (is.na(grp$alternative_year)) Inf else 2 * grp$alternative_year - 1
+      start[v] <- max(start[v], min(via_course, via_other))
+    }
+    if (v %in% names(not_before)) start[v] <- max(start[v], not_before[[v]])
+    start[v] <- offered_term(ix, v, start[v])
+  }
+  start
+}
+
+# Earliest start of every course; `not_before` delays some (e.g. a retake after failing).
+# Starts only move later, so just the delayed courses and their dependants are redone.
+earliest_terms <- function(ix, not_before = NULL) {
+  if (is.null(not_before)) return(ix$earliest)
+  affected <- unlist(lapply(names(not_before), function(c)
+    as_ids(subcomponent(ix$graph, c, mode = "out"))))
+  propagate_starts(ix, ix$earliest, ix$order[ix$order %in% affected], not_before)
+}
+
+# Latest start that still finishes on time, and early enough for any later required
+# course that strictly needs it. "On time" is the end of the year the program lists the
+# course in (`plan = TRUE`) or the end of the degree (`plan = FALSE`).
+latest_terms <- function(ix, program, required, plan = TRUE) {
+  groups <- ix$groups
+  duration <- ix$duration
+  v <- V(program$graph)
+  # Programs that name no years are treated as 4-year degrees.
+  final_year <- max(c(v$program_year_max, if (all(is.na(v$program_year_max))) 4), na.rm = TRUE)
+  last_year <- if (plan) setNames(v$program_year_max, v$name)[required] else
+    setNames(rep(NA, length(required)), required)
+  last_year[is.na(last_year)] <- final_year
+  latest <- 2 * last_year - duration[required] + 1
+  latest <- setNames(vapply(seq_along(required), function(i)
+    offered_term(ix, required[i], latest[[i]], step = -1), numeric(1)), required)
+  for (course in rev(ix$order[ix$order %in% required])) {
+    for (grp in groups[[course]]) {
+      pre <- grp$courses
+      if (length(pre) == 1 && is.na(grp$alternative_year) && pre %in% required) {
+        latest[pre] <- offered_term(ix, pre, min(latest[pre], latest[course] - duration[pre]), -1)
+      }
+    }
+  }
+  latest
+}
+
+period_label <- function(from, to) {
+  ifelse(is.na(from), "Year not given",
+         ifelse(from == to, paste("Year", from), paste0("Years ", from, "-", to)))
+}
+
+# Credits per year by kind. Rows whose section names no year get their own period rather
+# than being dropped; `has_total` says whether the period's credits came from a total row.
+credits_by_period <- function(reqs) {
+  reqs <- reqs[order(reqs$year_min, as.numeric(reqs$position), na.last = TRUE), ]
+  reqs$period <- period_label(reqs$year_min, reqs$year_max)
+  rows <- lapply(unique(reqs$period), function(period) {
+    r <- reqs[reqs$period == period, ]
+    credits <- function(kind) sum(r$credits[r$requirement_kind == kind], na.rm = TRUE)
+    total <- r$credits[r$requirement_kind == "total"][1]
+    fixed <- c(Required = credits("course"), `Choose from a list` = credits("course_choice"))
+    electives <- if (is.na(total)) credits("elective") else max(total - sum(fixed), 0)
+    data.frame(period = period, kind = c(names(fixed), "Electives"), credits = c(fixed, electives),
+               has_total = !is.na(total), total = total)
+  })
+  df <- do.call(rbind, rows)
+  df[ave(df$credits, df$period, FUN = sum) > 0, ]
+}
+
+plot_credits_by_year <- function(program, file) {
+  df <- credits_by_period(program$requirements)
+  df$period <- factor(df$period, unique(df$period))
+  df$kind <- factor(df$kind, c("Electives", "Choose from a list", "Required"))
+  fixed <- sum(df$credits[df$kind != "Electives"])
+  p <- ggplot(df, aes(period, credits, fill = kind)) +
+    geom_col(width = 0.6, colour = "#fcfcfb", linewidth = 0.6) +
+    geom_text(aes(label = ifelse(credits > 0, credits, "")), position = position_stack(vjust = 0.5),
+              colour = INK, size = 3.4) +
+    scale_fill_manual(values = c(Required = PALETTE[1], `Choose from a list` = PALETTE[2],
+                                 Electives = "#d9d8d3"),
+                      breaks = c("Required", "Choose from a list", "Electives"), name = NULL) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+    labs(title = sprintf("%s: credits by year", program$name),
+         subtitle = sprintf("%d of %d listed credits (%.0f%%) are a specific course or a pick from a list",
+                            fixed, sum(df$credits), 100 * fixed / sum(df$credits)),
+         x = NULL, y = "Credits") +
+    theme_net() +
+    theme(panel.grid.major.x = element_blank(), legend.position = "top",
+          legend.justification = "left")
+  ggsave(file, p, width = 7, height = 5.5, dpi = 200)
+}
+
+plot_slack <- function(ix, program, file) {
+  v <- V(program$graph)
+  required <- intersect(v$name[v$role == "required"], V(ix$graph)$name)
+  earliest <- ix$earliest[required]
+  latest <- latest_terms(ix, program, required)
+  duration <- ix$duration[required]
+  df <- data.frame(course = sub("_O ", " ", required), earliest = earliest, latest = latest)
+  df$course <- ifelse(duration == 2, paste(df$course, "(2 terms)"), df$course)
+  df$status <- ifelse(latest < earliest, "Behind schedule",
+                      ifelse(latest == earliest, "No slack", "Has slack"))
+  df <- df[order(df$earliest, df$latest, df$course), ]
+  df$course <- factor(df$course, rev(df$course))
+  p <- ggplot(df, aes(y = course, colour = status)) +
+    geom_segment(aes(x = earliest, xend = pmax(latest, earliest)), linewidth = 2.2, lineend = "round") +
+    geom_point(aes(x = earliest), size = 3.2) +
+    scale_colour_manual(values = c(`Has slack` = PALETTE[1], `No slack` = PALETTE[2],
+                                   `Behind schedule` = INK), name = NULL, drop = TRUE) +
+    scale_x_continuous(breaks = 1:8, labels = term_label(1:8), limits = c(0.7, 8.3)) +
+    labs(title = sprintf("%s: when each required course can start", program$name),
+         subtitle = "Earliest start allowed, to the latest start that keeps to the program's year plan",
+         x = NULL, y = NULL) +
     theme_net() +
     theme(panel.grid.major.y = element_blank(), legend.position = "top",
           legend.justification = "left")
-  ggsave(file, p, width = 8, height = 5.5, dpi = 200)
+  ggsave(file, p, width = 8, height = 1.6 + 0.3 * nrow(df), dpi = 200)
+  invisible(df)
 }
 
-subject_figures <- function(g, subject, target = NULL, dir = "figures") {
+# What `start` needs beyond the `covered` courses: courses that are the only option in a
+# group (followed further back), and "one of" groups none of whose options the program lists.
+unmet_prerequisites <- function(groups, start, covered, listed) {
+  found <- list()
+  queue <- start
+  while (length(queue)) {
+    course <- queue[1]
+    queue <- queue[-1]
+    for (grp in groups[[course]]) {
+      options <- grp$courses
+      if (!is.na(grp$alternative_year) || any(options %in% covered)) next
+      if (length(options) == 1) {
+        found[[length(found) + 1]] <- data.frame(needs = options, one_of = FALSE)
+        covered <- c(covered, options)
+        queue <- c(queue, options)
+      } else if (!any(options %in% listed)) {
+        found[[length(found) + 1]] <- data.frame(needs = paste(sort(options), collapse = "|"),
+                                                 one_of = TRUE)
+      }
+    }
+  }
+  if (length(found)) unique(do.call(rbind, found)) else NULL
+}
+
+hidden_prerequisites <- function(ix, program) {
+  role <- setNames(V(program$graph)$role, V(program$graph)$name)
+  role <- role[names(role) %in% V(ix$graph)$name]
+  groups <- ix$groups
+  required <- names(role)[role == "required"]
+  listed <- names(role)[role != "not listed"]
+  # Students take every required course, so whatever those force counts as covered for the rest.
+  from_required <- do.call(rbind, lapply(required, function(r)
+    unmet_prerequisites(groups, r, required, listed)))
+  forced <- c(required, if (!is.null(from_required)) from_required$needs[!from_required$one_of])
+  rows <- lapply(listed, function(course) {
+    covered <- if (role[[course]] == "required") required else forced
+    found <- unmet_prerequisites(groups, course, covered, listed)
+    if (!is.null(found)) cbind(course = course, found)
+  })
+  df <- do.call(rbind, rows)
+  if (is.null(df)) return(NULL)
+  df$course_role <- role[df$course]
+  df$needs_role <- ifelse(df$one_of, "not listed", role[df$needs])
+  df
+}
+
+plot_hidden_prerequisites <- function(ix, program, file) {
+  df <- hidden_prerequisites(ix, program)
+  title <- sprintf("%s: prerequisites the program doesn't list", program$name)
+  if (is.null(df)) {
+    p <- ggplot() + annotate("text", x = 0, y = 0, label = "None found", colour = MUTED) +
+      labs(title = title) + theme_void()
+    return(ggsave(file, p, width = 7, height = 2, dpi = 200))
+  }
+  label <- function(codes) gsub("_O ", " ", gsub("|", " or ", codes, fixed = TRUE))
+  note <- c(required = "", choice = " (a choice)", `elective list` = " (elective)", `not listed` = "")
+  df$row <- paste0(label(df$course), note[df$course_role])
+  df$need <- paste0(label(df$needs), note[df$needs_role])
+  df$kind <- ifelse(df$one_of, "One of these", "Only option")
+  df <- df[order(match(df$course_role, c("required", "choice", "elective list")), df$course,
+                 df$one_of), ]
+  df$row <- factor(df$row, rev(unique(df$row)))
+  df$slot <- ave(seq_len(nrow(df)), df$row, FUN = seq_along)
+  p <- ggplot(df, aes(slot, row, label = need, fill = kind)) +
+    geom_label(hjust = 0, size = 3.4, linewidth = 0, label.padding = unit(0.35, "lines"),
+               colour = INK) +
+    scale_fill_manual(values = c(`Only option` = "#f2a07c", `One of these` = "#fbd9c8"),
+                      name = "Also needs", breaks = c("Only option", "One of these")) +
+    scale_x_continuous(limits = c(1, max(df$slot) + 1.6), expand = c(0, 0.05)) +
+    guides(fill = guide_legend(override.aes = list(label = "    "))) +
+    labs(title = title,
+         subtitle = sprintf("%d of the program's courses need a course it doesn't require",
+                            length(unique(df$course))),
+         x = NULL, y = NULL) +
+    theme_net() +
+    theme(panel.grid.major.x = element_blank(), axis.text.x = element_blank(),
+          legend.position = "top", legend.justification = "left")
+  ggsave(file, p, width = 8, height = 1.8 + 0.4 * length(unique(df$row)), dpi = 200)
+}
+
+# Pages that list several tracks: use the first Major, otherwise drop Honours and Minors.
+default_track <- function(sections) {
+  tops <- unique(sub(" > .*", "", sections))
+  if (length(tops) < 2) return(NULL)
+  major <- grep("\\bMajor\\b", tops, value = TRUE)
+  keep <- if (length(major)) major[1] else grep("Honours|Minor", tops, value = TRUE, invert = TRUE)
+  paste0("^(", paste(gsub("([().])", "\\\\\\1", keep), collapse = "|"), ")")
+}
+
+# One row per program whose requirement tables give a complete, consistent degree:
+# every year has a total, required + choice doesn't exceed it, nothing is under "Year not
+# given", and the years add up to 90-130 credits.
+program_shares <- function(g) {
+  programs <- read.csv(file.path(PROGRAM_DIR, "programs.csv"), colClasses = "character")
+  reqs <- read.csv(file.path(PROGRAM_DIR, "requirements.csv"), colClasses = "character")
+  rows <- lapply(programs$program_id, function(id) {
+    sections <- reqs$section[reqs$program_id == id & reqs$source_type == "table"]
+    if (!length(sections)) return(NULL)
+    program <- load_program(id, g, track = default_track(sections))
+    d <- credits_by_period(program$requirements)
+    fixed <- tapply(d$credits[d$kind != "Electives"], d$period[d$kind != "Electives"], sum)
+    total <- tapply(d$total, d$period, `[`, 1)
+    ok <- nrow(d) > 0 && all(d$has_total) && !any(d$period == "Year not given") &&
+      all(fixed[names(total)] <= total) && sum(d$credits) >= 90 && sum(d$credits) <= 130
+    years <- program$requirements$year_min
+    first_year <- if (all(is.na(years))) NA else min(years, na.rm = TRUE)
+    data.frame(program = program$name, first_year = first_year, ok = ok,
+               kind = c("Required", "Choose from a list", "Electives"),
+               credits = vapply(c("Required", "Choose from a list", "Electives"),
+                                function(k) sum(d$credits[d$kind == k]), numeric(1)))
+  })
+  do.call(rbind, rows)
+}
+
+plot_program_comparison <- function(g, file) {
+  all <- program_shares(g)
+  df <- all[all$ok, ]
+  df$program <- ifelse(df$first_year > 1, sprintf("%s (from year %d)", df$program, df$first_year),
+                       df$program)
+  df$share <- 100 * df$credits / ave(df$credits, df$program, FUN = sum)
+  fixed <- tapply(df$share[df$kind != "Electives"], df$program[df$kind != "Electives"], sum)
+  df$program <- factor(df$program, names(sort(fixed)))
+  df$kind <- factor(df$kind, c("Electives", "Choose from a list", "Required"))
+  p <- ggplot(df, aes(share, program, fill = kind)) +
+    geom_col(width = 0.7, colour = "#fcfcfb", linewidth = 0.4) +
+    geom_text(data = data.frame(program = names(fixed), share = as.numeric(fixed)),
+              aes(x = 101, y = program, label = sprintf("%.0f%%", share)), inherit.aes = FALSE,
+              hjust = 0, size = 3.2, colour = INK) +
+    scale_fill_manual(values = c(Required = PALETTE[1], `Choose from a list` = PALETTE[2],
+                                 Electives = "#d9d8d3"),
+                      breaks = c("Required", "Choose from a list", "Electives"), name = NULL) +
+    scale_x_continuous(limits = c(0, 108), breaks = seq(0, 100, 25),
+                       labels = function(x) paste0(x, "%"), expand = c(0, 0)) +
+    labs(title = "How much of each degree is fixed",
+         subtitle = sprintf("Share of credits; the %d of %d programs with complete requirement tables",
+                            length(unique(df$program)), length(unique(all$program))),
+         x = NULL, y = NULL) +
+    theme_net() +
+    theme(panel.grid.major.y = element_blank(), legend.position = "top",
+          legend.justification = "left")
+  ggsave(file, p, width = 8.5, height = 2 + 0.32 * length(unique(df$program)), dpi = 200)
+}
+
+# Fail each required course once at its planned term (its earliest start, but not before
+# the year the program lists it in) and retake it at the next offering; everything else
+# still starts as early as prerequisites allow. Graduation is delayed if any required
+# course is pushed past the latest start that still finishes the degree on time.
+# "COSC_O 210", "COSC_O 211", "MATH_O 221" -> "COSC 210, 211, MATH 221"
+course_list <- function(codes) {
+  subject <- sub("_O .*", "", codes)
+  number <- sub(".* ", "", codes)
+  paste(ifelse(c(TRUE, subject[-1] != subject[-length(subject)]),
+               paste(subject, number), number), collapse = ", ")
+}
+
+program_failure_impact <- function(ix, program) {
+  v <- V(program$graph)
+  required <- intersect(v$name[v$role == "required"], V(ix$graph)$name)
+  earliest <- ix$earliest
+  latest <- latest_terms(ix, program, required, plan = FALSE)
+  duration <- ix$duration
+  listed_year <- setNames(v$program_year_min, v$name)
+  do.call(rbind, lapply(required, function(course) {
+    planned <- max(earliest[[course]], if (is.na(listed_year[[course]])) 1 else 2 * listed_year[[course]] - 1)
+    planned <- offered_term(ix, course, planned)
+    after <- earliest_terms(ix, setNames(planned + duration[[course]], course))
+    pushed <- setdiff(required[after[required] > earliest[required]], course)
+    data.frame(course = course, planned = planned, pushed_back = length(pushed),
+               pushed = course_list(pushed),
+               delay = max(0, after[required] - latest[required]))
+  }))
+}
+
+plot_program_failure_impact <- function(ix, program, file) {
+  df <- program_failure_impact(ix, program)
+  if (!is.null(df)) df <- df[df$pushed_back > 0 | df$delay > 0, ]
+  title <- sprintf("%s: if you fail a required course", program$name)
+  if (is.null(df) || !nrow(df)) {
+    p <- ggplot() + annotate("text", x = 0, y = 0, label = "No required course holds up another",
+                             colour = MUTED) + labs(title = title) + theme_void()
+    return(ggsave(file, p, width = 7, height = 2, dpi = 200))
+  }
+  df <- df[order(-df$delay, -df$pushed_back, df$planned), ]
+  df$row <- factor(sprintf("%s (%s)", sub("_O ", " ", df$course), term_label(df$planned)),
+                   rev(sprintf("%s (%s)", sub("_O ", " ", df$course), term_label(df$planned))))
+  df$effect <- ifelse(df$delay > 0, "Delays graduation", "No delay")
+  df$note <- paste0(ifelse(df$delay > 0, sprintf("+%d term%s", df$delay, ifelse(df$delay > 1, "s", "")),
+                           "no delay"),
+                    ifelse(df$pushed_back > 0, paste0("  ·  pushes back ", df$pushed), ""))
+  p <- ggplot(df, aes(pushed_back, row, fill = effect)) +
+    geom_col(width = 0.6) +
+    geom_point(data = df[df$pushed_back == 0, ], aes(colour = effect), size = 3, show.legend = FALSE) +
+    geom_text(aes(x = pushed_back + 0.2, label = note), hjust = 0, size = 3, colour = INK) +
+    scale_colour_manual(values = c(`Delays graduation` = PALETTE[2], `No delay` = PALETTE[1])) +
+    scale_fill_manual(values = c(`Delays graduation` = PALETTE[2], `No delay` = PALETTE[1]),
+                      name = NULL) +
+    scale_x_continuous(limits = c(-0.3, max(df$pushed_back) * 2.2 + 3), expand = c(0, 0),
+                       breaks = function(x) seq(0, max(df$pushed_back), by = 1)) +
+    labs(title = title,
+         subtitle = "Failing once in the planned term (shown) and retaking it at the next chance",
+         x = "Required courses pushed back", y = NULL) +
+    theme_net() +
+    theme(panel.grid.major.y = element_blank(), legend.position = "top",
+          legend.justification = "left")
+  ggsave(file, p, width = 9, height = 2.2 + 0.4 * nrow(df), dpi = 200)
+}
+
+program_figures <- function(g, program_name, dir = "figures/programs", ix = prereq_index()) {
+  program <- load_program(program_name, g)
+  folder <- file.path(dir, gsub("^-|-$", "", gsub("[^a-z0-9]+", "-", tolower(program$name))))
+  dir.create(folder, showWarnings = FALSE, recursive = TRUE)
+  plot_credits_by_year(program, file.path(folder, "credits_by_year.png"))
+  plot_slack(ix, program, file.path(folder, "slack.png"))
+  plot_hidden_prerequisites(ix, program, file.path(folder, "hidden_prerequisites.png"))
+  plot_program_failure_impact(ix, program, file.path(folder, "failure_impact.png"))
+}
+
+subject_figures <- function(g, subject, target = NULL, dir = "figures/subjects") {
   focus <- focus_subgraph(g, subject)
   linked <- delete_vertices(focus, degree(focus) == 0)
   if (is.null(target)) target <- tail(longest_path(focus), 1)
   prefix <- file.path(dir, tolower(subject), "")
   dir.create(prefix, showWarnings = FALSE, recursive = TRUE)
   palette <- subject_palette(linked, first = subject)
-  plot_merged(linked, degree(linked, mode = "out"),
+  merged <- merge_equivalent(linked, degree(linked, mode = "out"))
+  plot_network(merged$graph, merged$values,
                sprintf("%s prerequisite network, node size = out-degree", subject),
-               paste0(prefix, "gateways.png"), palette)
-  plot_merged(linked, betweenness(linked),
-               sprintf("%s prerequisite network, node size = betweenness", subject),
-               paste0(prefix, "bridges.png"), palette)
+               paste0(prefix, "gateways.png"), palette = palette)
   plot_chain(g, target, paste0(prefix, "chain.png"), palette)
-  plot_failure_impact(load_network(simplify = FALSE), subject, paste0(prefix, "failure_impact.png"))
 }
 
 if (sys.nframe() == 0) {
-  subjects <- toupper(commandArgs(trailingOnly = TRUE))
-  if (!length(subjects)) stop("Usage: Rscript analysis/viz.R SUBJECT [SUBJECT ...]  e.g. COSC")
+  args <- commandArgs(trailingOnly = TRUE)
+  flag <- which(args == "--program")
+  programs <- args[flag + 1]
+  subjects <- toupper(args[-c(flag, flag + 1)])
+  if (anyNA(programs) || !length(c(subjects, programs))) {
+    stop('Usage: Rscript analysis/viz.R [SUBJECT ...] [--program "NAME" ...]\n',
+         '  e.g. Rscript analysis/viz.R COSC --program "Computer Science (B.Sc.)"')
+  }
   dir.create("figures", showWarnings = FALSE)
   g <- load_network()
   unknown <- setdiff(subjects, V(g)$subject)
@@ -285,6 +621,9 @@ if (sys.nframe() == 0) {
            "figures/bridges.png")
   plot_degree_distribution(g, "figures/degree_distribution.png")
   plot_subject_heatmap(g, "figures/subject_heatmap.png")
+  plot_program_comparison(g, "figures/program_comparison.png")
   for (subject in subjects) subject_figures(g, subject)
+  ix <- if (length(programs)) prereq_index()
+  for (program in programs) program_figures(g, program, ix = ix)
   cat("Wrote", length(list.files("figures", recursive = TRUE)), "files to figures/\n")
 }

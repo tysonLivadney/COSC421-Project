@@ -38,8 +38,33 @@ class RequirementParsingTests(unittest.TestCase):
             ),
             [{"COSC_O 222"}, {"PHYS_O 121", "PHYS_O 122"}],
         )
-        self.assertEqual(groups("3 credits of 300-level ENGL. Third-year standing."), [])
+        self.assertEqual(groups("3 credits of 300-level ENGL."), [])
         self.assertEqual(groups("3 credits from POLI 310-329."), [])
+
+
+    def test_non_course_alternatives_are_marked(self) -> None:
+        self.assertEqual(
+            groups("Either (a) a score of 67% or higher in one of MATH 12, PREC 12 or "
+                   "(b) a score of 60% or higher in one of MATH 125, MATH 126."),
+            [{"MATH_O 125", "MATH_O 126", "*"}],
+        )
+        self.assertEqual(
+            groups("A score of 70% or higher in one of PREC 12, MATH 12, MATH_O 125; "
+                   "or one of MATH_O 100, 101."),
+            [{"MATH_O 100", "MATH_O 101", "MATH_O 125", "*"}],
+        )
+        self.assertEqual(groups("Fourth year standing or COSC_O 310."), [{"COSC_O 310", "STANDING:4"}])
+        self.assertEqual(groups("COSC_O 304 and third-year standing."),
+                         [{"COSC_O 304"}, {"STANDING:3"}])
+        self.assertEqual(
+            groups("Either (a) COSC_O 222 or (b) third-year standing and one of COSC_O 111, COSC_O 121."),
+            [{"COSC_O 111", "COSC_O 121", "COSC_O 222"}, {"COSC_O 222", "STANDING:3"}],
+        )
+        self.assertEqual(groups("One of COSC 111, COSC 112."), [{"COSC_O 111", "COSC_O 112"}])
+        self.assertEqual(
+            groups("6 credits of HIST and third-year standing; or HIST 122 and third-year standing."),
+            [{"*", "HIST_O 122"}, {"STANDING:3"}],
+        )
 
 
 class BuildTests(unittest.TestCase):
@@ -52,12 +77,13 @@ class BuildTests(unittest.TestCase):
         }
         nodes, edges = build([course])
         self.assertEqual(
-            [(e["from"], e["type"], e["group_id"]) for e in edges],
-            [("COSC_O 121", "prereq", 1), ("COSC_O 999", "prereq", 1)],
+            [(e["from"], e["type"], e["group_id"], e["alternative_year"]) for e in edges],
+            [("COSC_O 121", "prereq", 1, ""), ("COSC_O 999", "prereq", 1, "")],
         )
         by_code = {n["course_code"]: n for n in nodes}
         self.assertFalse(by_code["COSC_O 121"]["in_calendar"])
         self.assertIn("Third-year standing", by_code["COSC_O 222"]["unparsed_text"])
+        self.assertEqual(by_code["COSC_O 222"]["min_standing"], 3)
 
 
 if __name__ == "__main__":
