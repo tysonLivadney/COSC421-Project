@@ -101,7 +101,7 @@ calendar-wide figures to `figures/`, plus one folder per subject under
 figures/
 ├── gateways.png, bridges.png, degree_distribution.png, subject_heatmap.png, program_comparison.png
 ├── subjects/cosc/                      gateways, bridges, chain, failure_impact
-└── programs/computer-science-b-sc/     credits_by_year, slack, hidden_prerequisites
+└── programs/computer-science-b-sc/     credits_by_year, slack, hidden_prerequisites, failure_impact
 ```
 
 | File | Shows |
@@ -118,6 +118,7 @@ figures/
 | `programs/<program>/credits_by_year.png` | Required / choose-from-a-list / elective credits in each year of the program |
 | `programs/<program>/slack.png` | For each required course, the earliest and latest term it can start |
 | `programs/<program>/hidden_prerequisites.png` | Courses the program lists that need a course it doesn't require |
+| `programs/<program>/failure_impact.png` | For each required course: which required courses failing it pushes back, and whether graduation is delayed |
 
 "Blocked" means no alternative is left: a course is blocked when every option in one
 of its "one of" groups is blocked. Courses that can still be reached another way count
@@ -168,6 +169,17 @@ assumed to be offered every term.
 "No slack" courses have to be taken in exactly that term to finish in four years;
 failing one delays graduation. For B.Sc. Computer Science this reproduces the
 Calendar's note that COSC 304, 310 and 341 must be taken in third year.
+
+### Program failure impact
+
+Each required course is failed once in its planned term (its earliest start, but not
+before the first term of the year the program lists it in) and retaken at the next
+chance (the next term, or the next year for a two-term course). Every other course
+still starts as early as its prerequisites allow. "Pushes back" lists the required
+courses whose earliest start moves later. Graduation is delayed when any required course
+is pushed past its latest start from the slack chart. For B.Sc. Computer Science,
+failing COSC 121 costs a term and failing COSC 499 costs a year. Failing COSC 222 pushes
+back COSC 304 and 320, but slack absorbs it.
 
 ### Hidden prerequisites
 

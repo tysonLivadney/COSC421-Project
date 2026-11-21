@@ -214,16 +214,24 @@ prereq_groups <- function(g_raw) {
     list(courses = x$from, alternative_year = x$alternative_year[1])))
 }
 
+# Everything the blocking and term calculations need, built once per run and passed
+# to the figure functions as `ix`.
+prereq_index <- function(g_raw = load_network(simplify = FALSE)) {
+  ix <- list(graph = g_raw, groups = prereq_groups(g_raw), duration = course_terms(g_raw),
+             order = as_ids(topo_sort(g_raw)))
+  standing <- ifelse(is.na(V(g_raw)$min_standing), 1, V(g_raw)$min_standing)
+  ix$earliest <- propagate_starts(ix, setNames(2 * standing - 1, V(g_raw)$name), ix$order)
+  ix
+}
+
 # A course is blocked when every option in one of its groups is blocked; a group that
 # also accepts something other than a course (standing, high school, ...) never blocks.
-failure_impact <- function(g_raw, courses) {
-  groups <- prereq_groups(g_raw)
-  order <- as_ids(topo_sort(g_raw))
+failure_impact <- function(ix, courses) {
   do.call(rbind, lapply(courses, function(course) {
-    downstream <- setdiff(as_ids(subcomponent(g_raw, course, mode = "out")), course)
+    downstream <- setdiff(as_ids(subcomponent(ix$graph, course, mode = "out")), course)
     blocked <- course
-    for (v in order[order %in% downstream]) {
-      if (any(vapply(groups[[v]], function(grp)
+    for (v in ix$order[ix$order %in% downstream]) {
+      if (any(vapply(ix$groups[[v]], function(grp)
         is.na(grp$alternative_year) && all(grp$courses %in% blocked), logical(1)))) {
         blocked <- c(blocked, v)
       }
@@ -232,9 +240,10 @@ failure_impact <- function(g_raw, courses) {
   }))
 }
 
-plot_failure_impact <- function(g_raw, subject, file, n = 15) {
+plot_failure_impact <- function(ix, subject, file, n = 15) {
+  g_raw <- ix$graph
   courses <- V(g_raw)[subject == .env$subject & degree(g_raw, mode = "out") > 0]$name
-  impact <- failure_impact(g_raw, courses)
+  impact <- failure_impact(ix, courses)
   stopifnot(all(impact$blocked <= impact$downstream))
   impact <- head(impact[order(-impact$blocked, -impact$downstream), ], n)
   impact$label <- factor(sub("_O ", " ", impact$course), rev(sub("_O ", " ", impact$course)))
@@ -267,35 +276,43 @@ course_terms <- function(g) {
 
 term_label <- function(term) sprintf("Y%d T%d", (term + 1) %/% 2, (term + 1) %% 2 + 1)
 
-earliest_terms <- function(g_raw) {
-  groups <- prereq_groups(g_raw)
-  duration <- course_terms(g_raw)
-  standing <- ifelse(is.na(V(g_raw)$min_standing), 1, V(g_raw)$min_standing)
-  start <- setNames(2 * standing - 1, V(g_raw)$name)
-  for (v in as_ids(topo_sort(g_raw))) {
-    for (grp in groups[[v]]) {
+# Pushes `start` forward through `courses` (in prerequisite order) so each starts after
+# the quickest way through each of its groups. `not_before` sets minimum starts.
+propagate_starts <- function(ix, start, courses, not_before = NULL) {
+  duration <- ix$duration
+  for (v in courses) {
+    for (grp in ix$groups[[v]]) {
       via_course <- min(start[grp$courses] + duration[grp$courses])
       via_other <- if (is.na(grp$alternative_year)) Inf else 2 * grp$alternative_year - 1
       start[v] <- max(start[v], min(via_course, via_other))
     }
+    if (v %in% names(not_before)) start[v] <- max(start[v], not_before[[v]])
     if (duration[v] == 2 && start[v] %% 2 == 0) start[v] <- start[v] + 1
   }
   start
 }
 
+# Earliest start of every course; `not_before` delays some (e.g. a retake after failing).
+# Starts only move later, so just the delayed courses and their dependants are redone.
+earliest_terms <- function(ix, not_before = NULL) {
+  if (is.null(not_before)) return(ix$earliest)
+  affected <- unlist(lapply(names(not_before), function(c)
+    as_ids(subcomponent(ix$graph, c, mode = "out"))))
+  propagate_starts(ix, ix$earliest, ix$order[ix$order %in% affected], not_before)
+}
+
 # Latest start that still finishes on time: by the end of the program year the course is
 # listed in, and early enough for any later required course that strictly needs it.
-latest_terms <- function(g_raw, program, required) {
-  groups <- prereq_groups(g_raw)
-  duration <- course_terms(g_raw)
+latest_terms <- function(ix, program, required) {
+  groups <- ix$groups
+  duration <- ix$duration
   v <- V(program$graph)
   last_year <- setNames(v$program_year_max, v$name)[required]
   # Programs that name no years are treated as 4-year degrees.
   last_year[is.na(last_year)] <- max(c(v$program_year_max, if (all(is.na(v$program_year_max))) 4),
                                      na.rm = TRUE)
   latest <- 2 * last_year - duration[required] + 1
-  order <- as_ids(topo_sort(g_raw))
-  for (course in rev(order[order %in% required])) {
+  for (course in rev(ix$order[ix$order %in% required])) {
     for (grp in groups[[course]]) {
       pre <- grp$courses
       if (length(pre) == 1 && is.na(grp$alternative_year) && pre %in% required) {
@@ -353,12 +370,12 @@ plot_credits_by_year <- function(program, file) {
   ggsave(file, p, width = 7, height = 5.5, dpi = 200)
 }
 
-plot_slack <- function(g_raw, program, file) {
+plot_slack <- function(ix, program, file) {
   v <- V(program$graph)
-  required <- intersect(v$name[v$role == "required"], V(g_raw)$name)
-  earliest <- earliest_terms(g_raw)[required]
-  latest <- latest_terms(g_raw, program, required)
-  duration <- course_terms(g_raw)[required]
+  required <- intersect(v$name[v$role == "required"], V(ix$graph)$name)
+  earliest <- ix$earliest[required]
+  latest <- latest_terms(ix, program, required)
+  duration <- ix$duration[required]
   df <- data.frame(course = sub("_O ", " ", required), earliest = earliest, latest = latest)
   df$course <- ifelse(duration == 2, paste(df$course, "(2 terms)"), df$course)
   df$status <- ifelse(latest < earliest, "Behind schedule",
@@ -405,10 +422,10 @@ unmet_prerequisites <- function(groups, start, covered, listed) {
   if (length(found)) unique(do.call(rbind, found)) else NULL
 }
 
-hidden_prerequisites <- function(g_raw, program) {
+hidden_prerequisites <- function(ix, program) {
   role <- setNames(V(program$graph)$role, V(program$graph)$name)
-  role <- role[names(role) %in% V(g_raw)$name]
-  groups <- prereq_groups(g_raw)
+  role <- role[names(role) %in% V(ix$graph)$name]
+  groups <- ix$groups
   required <- names(role)[role == "required"]
   listed <- names(role)[role != "not listed"]
   # Students take every required course, so whatever those force counts as covered for the rest.
@@ -427,8 +444,8 @@ hidden_prerequisites <- function(g_raw, program) {
   df
 }
 
-plot_hidden_prerequisites <- function(g_raw, program, file) {
-  df <- hidden_prerequisites(g_raw, program)
+plot_hidden_prerequisites <- function(ix, program, file) {
+  df <- hidden_prerequisites(ix, program)
   title <- sprintf("%s: prerequisites the program doesn't list", program$name)
   if (is.null(df)) {
     p <- ggplot() + annotate("text", x = 0, y = 0, label = "None found", colour = MUTED) +
@@ -525,17 +542,82 @@ plot_program_comparison <- function(g, file) {
   ggsave(file, p, width = 8.5, height = 2 + 0.32 * length(unique(df$program)), dpi = 200)
 }
 
-program_figures <- function(g, program_name, dir = "figures/programs") {
+# Fail each required course once at its planned term (its earliest start, but not before
+# the year the program lists it in) and retake it straight away; everything else still
+# starts as early as prerequisites allow. Graduation is delayed if any required course
+# is pushed past its latest start.
+# "COSC_O 210", "COSC_O 211", "MATH_O 221" -> "COSC 210, 211, MATH 221"
+course_list <- function(codes) {
+  subject <- sub("_O .*", "", codes)
+  number <- sub(".* ", "", codes)
+  paste(ifelse(c(TRUE, subject[-1] != subject[-length(subject)]),
+               paste(subject, number), number), collapse = ", ")
+}
+
+program_failure_impact <- function(ix, program) {
+  v <- V(program$graph)
+  required <- intersect(v$name[v$role == "required"], V(ix$graph)$name)
+  earliest <- ix$earliest
+  latest <- latest_terms(ix, program, required)
+  duration <- ix$duration
+  listed_year <- setNames(v$program_year_min, v$name)
+  do.call(rbind, lapply(required, function(course) {
+    planned <- max(earliest[[course]], if (is.na(listed_year[[course]])) 1 else 2 * listed_year[[course]] - 1)
+    if (duration[[course]] == 2 && planned %% 2 == 0) planned <- planned + 1
+    after <- earliest_terms(ix, setNames(planned + duration[[course]], course))
+    pushed <- setdiff(required[after[required] > earliest[required]], course)
+    data.frame(course = course, planned = planned, pushed_back = length(pushed),
+               pushed = course_list(pushed),
+               delay = max(0, after[required] - latest[required]))
+  }))
+}
+
+plot_program_failure_impact <- function(ix, program, file) {
+  df <- program_failure_impact(ix, program)
+  if (!is.null(df)) df <- df[df$pushed_back > 0 | df$delay > 0, ]
+  title <- sprintf("%s: if you fail a required course", program$name)
+  if (is.null(df) || !nrow(df)) {
+    p <- ggplot() + annotate("text", x = 0, y = 0, label = "No required course holds up another",
+                             colour = MUTED) + labs(title = title) + theme_void()
+    return(ggsave(file, p, width = 7, height = 2, dpi = 200))
+  }
+  df <- df[order(-df$delay, -df$pushed_back, df$planned), ]
+  df$row <- factor(sprintf("%s (%s)", sub("_O ", " ", df$course), term_label(df$planned)),
+                   rev(sprintf("%s (%s)", sub("_O ", " ", df$course), term_label(df$planned))))
+  df$effect <- ifelse(df$delay > 0, "Delays graduation", "No delay")
+  df$note <- paste0(ifelse(df$delay > 0, sprintf("+%d term%s", df$delay, ifelse(df$delay > 1, "s", "")),
+                           "no delay"),
+                    ifelse(df$pushed_back > 0, paste0("  ·  pushes back ", df$pushed), ""))
+  p <- ggplot(df, aes(pushed_back, row, fill = effect)) +
+    geom_col(width = 0.6) +
+    geom_point(data = df[df$pushed_back == 0, ], aes(colour = effect), size = 3, show.legend = FALSE) +
+    geom_text(aes(x = pushed_back + 0.2, label = note), hjust = 0, size = 3, colour = INK) +
+    scale_colour_manual(values = c(`Delays graduation` = PALETTE[2], `No delay` = PALETTE[1])) +
+    scale_fill_manual(values = c(`Delays graduation` = PALETTE[2], `No delay` = PALETTE[1]),
+                      name = NULL) +
+    scale_x_continuous(limits = c(-0.3, max(df$pushed_back) * 2.2 + 3), expand = c(0, 0),
+                       breaks = function(x) seq(0, max(df$pushed_back), by = 1)) +
+    labs(title = title,
+         subtitle = "Failing once in the planned term (shown) and retaking it at the next chance",
+         x = "Required courses pushed back", y = NULL) +
+    theme_net() +
+    theme(panel.grid.major.y = element_blank(), legend.position = "top",
+          legend.justification = "left", plot.title.position = "plot")
+  ggsave(file, p, width = 9, height = 2.2 + 0.4 * nrow(df), dpi = 200)
+}
+
+program_figures <- function(g, program_name, dir = "figures/programs", ix = prereq_index()) {
   program <- load_program(program_name, g)
   folder <- file.path(dir, gsub("^-|-$", "", gsub("[^a-z0-9]+", "-", tolower(program$name))))
   dir.create(folder, showWarnings = FALSE, recursive = TRUE)
   plot_credits_by_year(program, file.path(folder, "credits_by_year.png"))
-  g_raw <- load_network(simplify = FALSE)
-  plot_slack(g_raw, program, file.path(folder, "slack.png"))
-  plot_hidden_prerequisites(g_raw, program, file.path(folder, "hidden_prerequisites.png"))
+  plot_slack(ix, program, file.path(folder, "slack.png"))
+  plot_hidden_prerequisites(ix, program, file.path(folder, "hidden_prerequisites.png"))
+  plot_program_failure_impact(ix, program, file.path(folder, "failure_impact.png"))
 }
 
-subject_figures <- function(g, subject, target = NULL, dir = "figures/subjects") {
+subject_figures <- function(g, subject, target = NULL, dir = "figures/subjects",
+                            ix = prereq_index()) {
   focus <- focus_subgraph(g, subject)
   linked <- delete_vertices(focus, degree(focus) == 0)
   if (is.null(target)) target <- tail(longest_path(focus), 1)
@@ -549,7 +631,7 @@ subject_figures <- function(g, subject, target = NULL, dir = "figures/subjects")
                sprintf("%s prerequisite network, node size = betweenness", subject),
                paste0(prefix, "bridges.png"), palette)
   plot_chain(g, target, paste0(prefix, "chain.png"), palette)
-  plot_failure_impact(load_network(simplify = FALSE), subject, paste0(prefix, "failure_impact.png"))
+  plot_failure_impact(ix, subject, paste0(prefix, "failure_impact.png"))
 }
 
 if (sys.nframe() == 0) {
@@ -576,7 +658,8 @@ if (sys.nframe() == 0) {
   plot_degree_distribution(g, "figures/degree_distribution.png")
   plot_subject_heatmap(g, "figures/subject_heatmap.png")
   plot_program_comparison(g, "figures/program_comparison.png")
-  for (subject in subjects) subject_figures(g, subject)
-  for (program in programs) program_figures(g, program)
+  ix <- prereq_index()
+  for (subject in subjects) subject_figures(g, subject, ix = ix)
+  for (program in programs) program_figures(g, program, ix = ix)
   cat("Wrote", length(list.files("figures", recursive = TRUE)), "files to figures/\n")
 }
