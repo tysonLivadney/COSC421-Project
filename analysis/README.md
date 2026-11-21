@@ -100,7 +100,7 @@ calendar-wide figures to `figures/`, plus one folder per subject under
 ```
 figures/
 ├── gateways.png, bridges.png, degree_distribution.png, subject_heatmap.png, program_comparison.png
-├── subjects/cosc/                      gateways, bridges, chain, failure_impact
+├── subjects/cosc/                      gateways, chain
 └── programs/computer-science-b-sc/     credits_by_year, slack, hidden_prerequisites, failure_impact
 ```
 
@@ -112,17 +112,11 @@ figures/
 | `subject_heatmap.png` | Prerequisite links between subjects (prerequisite subject → course subject) |
 | `program_comparison.png` | Share of each program's credits that are required, chosen from a list, or electives |
 | `subjects/<subject>/gateways.png` | The subject's courses plus all their prerequisites, node size = out-degree |
-| `subjects/<subject>/bridges.png` | Same network, node size = betweenness |
 | `subjects/<subject>/chain.png` | Longest prerequisite chain in the subject, highlighted |
-| `subjects/<subject>/failure_impact.png` | For each course in the subject: courses downstream vs. courses blocked if you fail it |
 | `programs/<program>/credits_by_year.png` | Required / choose-from-a-list / elective credits in each year of the program |
 | `programs/<program>/slack.png` | For each required course, the earliest and latest term it can start |
 | `programs/<program>/hidden_prerequisites.png` | Courses the program lists that need a course it doesn't require |
 | `programs/<program>/failure_impact.png` | For each required course: which required courses failing it pushes back, and whether graduation is delayed |
-
-"Blocked" means no alternative is left: a course is blocked when every option in one
-of its "one of" groups is blocked. Courses that can still be reached another way count
-as downstream only.
 
 Dashed edges have alternatives; solid edges are required (the `required` attribute). The chosen
 subject is always blue; the next two most common subjects get the other colours and
@@ -155,31 +149,38 @@ its Honours); pages without a Major drop their Honours and Minor tracks.
 
 ### Slack
 
-Terms are numbered Y1 T1 to Y4 T2 (two terms a year, no summer) and every course is
-assumed to be offered every term.
+Terms are numbered Y1 T1 to Y4 T2 (two terms a year, no summer). A course can only start
+in a winter term it had sections in, according to the course schedule data
+(`load_offerings()`, 2025-26 and 2026-27; e.g. COSC 304 runs in Term 1 only). Courses
+with no winter sections in that data are assumed to run every term. Starts snap
+forward (earliest) or back (latest) to the nearest term the course runs.
 
 - **Earliest start:** the term after the quickest way through each prerequisite group,
   and no earlier than the course's required standing. A non-course option (high
   school, standing) counts as a way through.
 - **Latest start:** the end of the program year the course is listed in, moved earlier
-  for any later required course that strictly needs it.
+  for any later required course that strictly needs it. This follows the program's year
+  plan, which is a recommendation rather than a hard deadline.
 - 6+ credit courses (e.g. COSC 499) run September to April, so they take two terms and
   start in term 1.
 
-"No slack" courses have to be taken in exactly that term to finish in four years;
-failing one delays graduation. For B.Sc. Computer Science this reproduces the
-Calendar's note that COSC 304, 310 and 341 must be taken in third year.
+"No slack" courses have to be taken in exactly that term to stay on the program's plan.
+Whether failing one actually delays graduation is what the failure impact figure shows.
 
 ### Program failure impact
 
 Each required course is failed once in its planned term (its earliest start, but not
-before the first term of the year the program lists it in) and retaken at the next
-chance (the next term, or the next year for a two-term course). Every other course
-still starts as early as its prerequisites allow. "Pushes back" lists the required
-courses whose earliest start moves later. Graduation is delayed when any required course
-is pushed past its latest start from the slack chart. For B.Sc. Computer Science,
-failing COSC 121 costs a term and failing COSC 499 costs a year. Failing COSC 222 pushes
-back COSC 304 and 320, but slack absorbs it.
+before the first term of the year the program lists it in) and retaken the next time
+it's offered. Every other course still starts as early as its prerequisites allow.
+"Pushes back" lists the required courses whose earliest start moves later. Graduation
+is delayed when any required course is pushed past the latest start that still
+finishes the degree on time. That's the slack chart's latest start, but measured
+against the end of the degree instead of the program's year plan. It doesn't model how
+many courses fit in one term, so it shows the best case for catching up.
+
+For B.Sc. Computer Science only COSC 304 (Term 1 only, needed for COSC 499) and COSC 499
+itself delay graduation if failed, each by a year. Failing COSC 121, 221 or 222 pushes
+later courses back, but they can be caught up.
 
 ### Hidden prerequisites
 

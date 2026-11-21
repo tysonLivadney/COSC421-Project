@@ -100,6 +100,39 @@ load_program <- function(program, g = load_network(), track = NULL, dir = PROGRA
        missing = setdiff(listed$course, V(g)$name))
 }
 
+SCHEDULE_DIR <- "data/processed/course_schedule"
+
+# Which winter terms each course had sections in, across the collected years:
+# a logical matrix with columns T1 and T2, one row per course that had any. Summer
+# sections are ignored.
+load_offerings <- function(dir = SCHEDULE_DIR) {
+  paths <- file.path(dir, c("primary_resources.csv", "included_resources.csv"))
+  missing <- paths[!file.exists(paths)]
+  if (length(missing)) {
+    stop("Missing ", paste(missing, collapse = ", "),
+         " - run `python collection/json_to_csv.py` from the repo root first.")
+  }
+  read_columns <- function(path, keep) {
+    header <- names(read.csv(path, nrows = 1, check.names = FALSE))
+    read.csv(path, check.names = FALSE,
+             colClasses = ifelse(header %in% keep, "character", "NULL"))
+  }
+  sections <- read_columns(paths[1], c("resource_type", "source_file", "relationship.field_course.ids"))
+  courses <- read_columns(paths[2], c("resource_type", "resource_id", "attribute.field_course_code"))
+  sections <- sections[sections$resource_type == "node--section", ]
+  courses <- courses[courses$resource_type == "node--course", ]
+
+  ids <- regmatches(sections$relationship.field_course.ids,
+                    gregexpr("[0-9a-f-]{36}", sections$relationship.field_course.ids))
+  term <- sub(".*winter_term_([12])_sections.*", "T\\1", sections$source_file)
+  rows <- rep(seq_len(nrow(sections)), lengths(ids))
+  offered <- data.frame(
+    course = courses$attribute.field_course_code[match(unlist(ids), courses$resource_id)],
+    term = term[rows])
+  offered <- offered[!is.na(offered$course) & offered$term %in% c("T1", "T2"), ]
+  unclass(table(offered$course, factor(offered$term, c("T1", "T2")))) > 0
+}
+
 if (sys.nframe() == 0) {
   g <- load_network()
   stopifnot(is_dag(g), vcount(g) > 0, ecount(g) > 0, !any_multiple(g))

@@ -14,7 +14,8 @@ theme_net <- function() {
       plot.subtitle = element_text(colour = MUTED),
       panel.grid.minor = element_blank(),
       panel.grid.major = element_line(colour = "#e6e5e1", linewidth = 0.3),
-      plot.background = element_rect(fill = "#fcfcfb", colour = NA)
+      plot.background = element_rect(fill = "#fcfcfb", colour = NA),
+      plot.title.position = "plot"
     )
 }
 
@@ -179,11 +180,6 @@ merge_equivalent <- function(g, values) {
   list(graph = merged, values = as.vector(tapply(values, groups, max)))
 }
 
-plot_merged <- function(g, values, title, file, palette) {
-  m <- merge_equivalent(g, values)
-  plot_network(m$graph, m$values, title, file, palette = palette)
-}
-
 plot_subject_heatmap <- function(g, file, n = 15) {
   ends <- ends(g, E(g))
   df <- data.frame(from = V(g)[ends[, 1]]$subject, to = V(g)[ends[, 2]]$subject)
@@ -216,59 +212,29 @@ prereq_groups <- function(g_raw) {
 
 # Everything the blocking and term calculations need, built once per run and passed
 # to the figure functions as `ix`.
-prereq_index <- function(g_raw = load_network(simplify = FALSE)) {
+prereq_index <- function(g_raw = load_network(simplify = FALSE), offerings = load_offerings()) {
   ix <- list(graph = g_raw, groups = prereq_groups(g_raw), duration = course_terms(g_raw),
              order = as_ids(topo_sort(g_raw)))
+  # Terms each course can start in. Courses with no winter sections in the schedule data
+  # are assumed to run every term; two-term courses always start in term 1.
+  names <- V(g_raw)$name
+  ix$offered <- matrix(TRUE, length(names), 2, dimnames = list(names, c("T1", "T2")))
+  known <- intersect(names, rownames(offerings))
+  ix$offered[known, ] <- offerings[known, ]
+  ix$offered[ix$duration == 2, ] <- rep(c(TRUE, FALSE), each = sum(ix$duration == 2))
   standing <- ifelse(is.na(V(g_raw)$min_standing), 1, V(g_raw)$min_standing)
   ix$earliest <- propagate_starts(ix, setNames(2 * standing - 1, V(g_raw)$name), ix$order)
   ix
 }
 
-# A course is blocked when every option in one of its groups is blocked; a group that
-# also accepts something other than a course (standing, high school, ...) never blocks.
-failure_impact <- function(ix, courses) {
-  do.call(rbind, lapply(courses, function(course) {
-    downstream <- setdiff(as_ids(subcomponent(ix$graph, course, mode = "out")), course)
-    blocked <- course
-    for (v in ix$order[ix$order %in% downstream]) {
-      if (any(vapply(ix$groups[[v]], function(grp)
-        is.na(grp$alternative_year) && all(grp$courses %in% blocked), logical(1)))) {
-        blocked <- c(blocked, v)
-      }
-    }
-    data.frame(course = course, downstream = length(downstream), blocked = length(blocked) - 1)
-  }))
-}
-
-plot_failure_impact <- function(ix, subject, file, n = 15) {
-  g_raw <- ix$graph
-  courses <- V(g_raw)[subject == .env$subject & degree(g_raw, mode = "out") > 0]$name
-  impact <- failure_impact(ix, courses)
-  stopifnot(all(impact$blocked <= impact$downstream))
-  impact <- head(impact[order(-impact$blocked, -impact$downstream), ], n)
-  impact$label <- factor(sub("_O ", " ", impact$course), rev(sub("_O ", " ", impact$course)))
-  long <- rbind(
-    data.frame(label = impact$label, value = impact$downstream, kind = "Downstream (any route)"),
-    data.frame(label = impact$label, value = impact$blocked, kind = "Blocked (no alternative)")
-  )
-  long$kind <- factor(long$kind, c("Downstream (any route)", "Blocked (no alternative)"))
-  p <- ggplot(long, aes(value, label, fill = kind)) +
-    geom_col(position = position_identity(), width = 0.7) +
-    geom_text(data = long[long$kind == "Blocked (no alternative)", ],
-              aes(label = value), hjust = -0.3, colour = INK, size = 3.2) +
-    scale_fill_manual(values = c("#cde2fb", PALETTE[1]), name = NULL) +
-    scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
-    labs(title = sprintf("If you fail a %s course", subject),
-         subtitle = "Courses anywhere in the calendar you can't take until you pass it",
-         x = "Courses", y = NULL) +
-    theme_net() +
-    theme(panel.grid.major.y = element_blank(), legend.position = "top",
-          legend.justification = "left")
-  ggsave(file, p, width = 8, height = 5.5, dpi = 200)
-}
-
 # Terms are numbered 1-8 (two per year, no summer). 6+ credit courses run September to
 # April, so they take two terms and can only start in term 1 of a year (odd terms).
+# Moves `term` forward (step = 1) or back (step = -1) to a term `course` is offered in.
+offered_term <- function(ix, course, term, step = 1) {
+  while (!ix$offered[course, 2 - term %% 2]) term <- term + step
+  term
+}
+
 course_terms <- function(g) {
   credits <- suppressWarnings(as.numeric(sub("-.*", "", V(g)$credits)))
   setNames(ifelse(!is.na(credits) & credits >= 6, 2, 1), V(g)$name)
@@ -287,7 +253,7 @@ propagate_starts <- function(ix, start, courses, not_before = NULL) {
       start[v] <- max(start[v], min(via_course, via_other))
     }
     if (v %in% names(not_before)) start[v] <- max(start[v], not_before[[v]])
-    if (duration[v] == 2 && start[v] %% 2 == 0) start[v] <- start[v] + 1
+    start[v] <- offered_term(ix, v, start[v])
   }
   start
 }
@@ -301,23 +267,26 @@ earliest_terms <- function(ix, not_before = NULL) {
   propagate_starts(ix, ix$earliest, ix$order[ix$order %in% affected], not_before)
 }
 
-# Latest start that still finishes on time: by the end of the program year the course is
-# listed in, and early enough for any later required course that strictly needs it.
-latest_terms <- function(ix, program, required) {
+# Latest start that still finishes on time, and early enough for any later required
+# course that strictly needs it. "On time" is the end of the year the program lists the
+# course in (`plan = TRUE`) or the end of the degree (`plan = FALSE`).
+latest_terms <- function(ix, program, required, plan = TRUE) {
   groups <- ix$groups
   duration <- ix$duration
   v <- V(program$graph)
-  last_year <- setNames(v$program_year_max, v$name)[required]
   # Programs that name no years are treated as 4-year degrees.
-  last_year[is.na(last_year)] <- max(c(v$program_year_max, if (all(is.na(v$program_year_max))) 4),
-                                     na.rm = TRUE)
+  final_year <- max(c(v$program_year_max, if (all(is.na(v$program_year_max))) 4), na.rm = TRUE)
+  last_year <- if (plan) setNames(v$program_year_max, v$name)[required] else
+    setNames(rep(NA, length(required)), required)
+  last_year[is.na(last_year)] <- final_year
   latest <- 2 * last_year - duration[required] + 1
+  latest <- setNames(vapply(seq_along(required), function(i)
+    offered_term(ix, required[i], latest[[i]], step = -1), numeric(1)), required)
   for (course in rev(ix$order[ix$order %in% required])) {
     for (grp in groups[[course]]) {
       pre <- grp$courses
       if (length(pre) == 1 && is.na(grp$alternative_year) && pre %in% required) {
-        latest[pre] <- min(latest[pre], latest[course] - duration[pre])
-        if (duration[pre] == 2 && latest[pre] %% 2 == 0) latest[pre] <- latest[pre] - 1
+        latest[pre] <- offered_term(ix, pre, min(latest[pre], latest[course] - duration[pre]), -1)
       }
     }
   }
@@ -389,7 +358,7 @@ plot_slack <- function(ix, program, file) {
                                    `Behind schedule` = INK), name = NULL, drop = TRUE) +
     scale_x_continuous(breaks = 1:8, labels = term_label(1:8), limits = c(0.7, 8.3)) +
     labs(title = sprintf("%s: when each required course can start", program$name),
-         subtitle = "From the earliest start allowed to the latest start for a 4-year finish",
+         subtitle = "Earliest start allowed, to the latest start that keeps to the program's year plan",
          x = NULL, y = NULL) +
     theme_net() +
     theme(panel.grid.major.y = element_blank(), legend.position = "top",
@@ -538,14 +507,13 @@ plot_program_comparison <- function(g, file) {
     theme_net() +
     theme(panel.grid.major.y = element_blank(), legend.position = "top",
           legend.justification = "left")
-  p <- p + theme(plot.title.position = "plot")
   ggsave(file, p, width = 8.5, height = 2 + 0.32 * length(unique(df$program)), dpi = 200)
 }
 
 # Fail each required course once at its planned term (its earliest start, but not before
-# the year the program lists it in) and retake it straight away; everything else still
-# starts as early as prerequisites allow. Graduation is delayed if any required course
-# is pushed past its latest start.
+# the year the program lists it in) and retake it at the next offering; everything else
+# still starts as early as prerequisites allow. Graduation is delayed if any required
+# course is pushed past the latest start that still finishes the degree on time.
 # "COSC_O 210", "COSC_O 211", "MATH_O 221" -> "COSC 210, 211, MATH 221"
 course_list <- function(codes) {
   subject <- sub("_O .*", "", codes)
@@ -558,12 +526,12 @@ program_failure_impact <- function(ix, program) {
   v <- V(program$graph)
   required <- intersect(v$name[v$role == "required"], V(ix$graph)$name)
   earliest <- ix$earliest
-  latest <- latest_terms(ix, program, required)
+  latest <- latest_terms(ix, program, required, plan = FALSE)
   duration <- ix$duration
   listed_year <- setNames(v$program_year_min, v$name)
   do.call(rbind, lapply(required, function(course) {
     planned <- max(earliest[[course]], if (is.na(listed_year[[course]])) 1 else 2 * listed_year[[course]] - 1)
-    if (duration[[course]] == 2 && planned %% 2 == 0) planned <- planned + 1
+    planned <- offered_term(ix, course, planned)
     after <- earliest_terms(ix, setNames(planned + duration[[course]], course))
     pushed <- setdiff(required[after[required] > earliest[required]], course)
     data.frame(course = course, planned = planned, pushed_back = length(pushed),
@@ -602,7 +570,7 @@ plot_program_failure_impact <- function(ix, program, file) {
          x = "Required courses pushed back", y = NULL) +
     theme_net() +
     theme(panel.grid.major.y = element_blank(), legend.position = "top",
-          legend.justification = "left", plot.title.position = "plot")
+          legend.justification = "left")
   ggsave(file, p, width = 9, height = 2.2 + 0.4 * nrow(df), dpi = 200)
 }
 
@@ -616,22 +584,18 @@ program_figures <- function(g, program_name, dir = "figures/programs", ix = prer
   plot_program_failure_impact(ix, program, file.path(folder, "failure_impact.png"))
 }
 
-subject_figures <- function(g, subject, target = NULL, dir = "figures/subjects",
-                            ix = prereq_index()) {
+subject_figures <- function(g, subject, target = NULL, dir = "figures/subjects") {
   focus <- focus_subgraph(g, subject)
   linked <- delete_vertices(focus, degree(focus) == 0)
   if (is.null(target)) target <- tail(longest_path(focus), 1)
   prefix <- file.path(dir, tolower(subject), "")
   dir.create(prefix, showWarnings = FALSE, recursive = TRUE)
   palette <- subject_palette(linked, first = subject)
-  plot_merged(linked, degree(linked, mode = "out"),
+  merged <- merge_equivalent(linked, degree(linked, mode = "out"))
+  plot_network(merged$graph, merged$values,
                sprintf("%s prerequisite network, node size = out-degree", subject),
-               paste0(prefix, "gateways.png"), palette)
-  plot_merged(linked, betweenness(linked),
-               sprintf("%s prerequisite network, node size = betweenness", subject),
-               paste0(prefix, "bridges.png"), palette)
+               paste0(prefix, "gateways.png"), palette = palette)
   plot_chain(g, target, paste0(prefix, "chain.png"), palette)
-  plot_failure_impact(ix, subject, paste0(prefix, "failure_impact.png"))
 }
 
 if (sys.nframe() == 0) {
@@ -658,8 +622,8 @@ if (sys.nframe() == 0) {
   plot_degree_distribution(g, "figures/degree_distribution.png")
   plot_subject_heatmap(g, "figures/subject_heatmap.png")
   plot_program_comparison(g, "figures/program_comparison.png")
-  ix <- prereq_index()
-  for (subject in subjects) subject_figures(g, subject, ix = ix)
+  for (subject in subjects) subject_figures(g, subject)
+  ix <- if (length(programs)) prereq_index()
   for (program in programs) program_figures(g, program, ix = ix)
   cat("Wrote", length(list.files("figures", recursive = TRUE)), "files to figures/\n")
 }
