@@ -209,6 +209,29 @@ plot_network(focus_subgraph(g, c("MATH", "STAT")), ...)
 longest_path(g, "COSC_O 499")
 ```
 
+## Degree planning across programs
+
+```bash
+Rscript analysis/degree_planning.R
+```
+
+Runs the slack and failure-impact calculations above for every program that passes the
+program comparison's completeness check (14 programs) and writes to `figures/planning/`:
+
+| File | Shows |
+|---|---|
+| `bottleneck_courses.png` | Grid of required courses that delay graduation if failed, by program, with the terms each course runs |
+| `program_fragility.png` | Programs ranked by how many required courses delay graduation if failed |
+| `program_summary.csv` | One row per program: required courses, no-slack courses, courses that delay graduation, and share of fixed credits |
+| `bottleneck_courses.csv` | One row per required course across programs |
+| `required_courses.csv` | One row per required course per program |
+
+This analysis covers the 14 programs whose requirement tables have complete year-by-year
+information, the same programs shown in `program_comparison.png`. Programs whose Calendar
+pages are structured differently, such as those that list course options in a single
+table or describe several pathways on the same page, are outside the scope of this
+analysis.
+
 ## Known limitations
 
 - Non-course requirements other than standing (permission, credit counts like "6
